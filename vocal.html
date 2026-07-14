@@ -38,6 +38,10 @@
     background: #1a1e2b; color: #cdd3e0; border: 1px solid #2a3040; }
   .mel-picker button.on { background: #26406e; color: #fff; border-color: #3b6dff; }
   .mel-info { font-size: 12px; color: #8a91a3; margin-top: 8px; line-height: 1.5; }
+  .calib-status { font-size: 13px; color: #cdd3e0; line-height: 1.55; }
+  .calib-status.set { color:#8ff0b8; font-weight:600; }
+  .calib-time { text-align:center; font-size:24px; font-weight:800; color:#3b6dff;
+    font-variant-numeric:tabular-nums; margin-top:8px; }
   .mel-notes { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
   .mel-notes span { background: #1a1e2b; border: 1px solid #2a3040; border-radius: 8px;
     padding: 5px 10px; font-size: 13px; font-weight: 700; color: #cdd3e0; }
@@ -71,6 +75,12 @@
   .score-lbl { font-size: 12px; color: #8a91a3; margin-top: 2px; }
   .score-sub { font-size: 13px; color: #aeb6c9; margin-top: 6px; }
   .compare { text-align: center; font-size: 14px; margin-top: 8px; font-weight: 700; }
+  .octave-note { margin: 8px auto 0; max-width: 420px; font-size: 12.5px; line-height: 1.5;
+    border-radius: 10px; padding: 8px 12px; font-weight: 600; }
+  .octave-note.shift { background:#132a1f; border:1px solid #235a3a; color:#8ff0b8; }
+  .octave-note.same  { background:#1a1e2b; border:1px solid #2a3040; color:#9aa2b5; }
+  .octave-note.reject{ background:#2a1f13; border:1px solid #5a4023; color:#ffcf7a; }
+  .octave-note b { color:#fff; }
 
   .graph-wrap { position: relative; margin-top: 6px; }
   .graph { width: 100%; height: 220px; display: block; background: #0a0c12;
@@ -140,6 +150,16 @@
   <button id="tabFree">🎙️ 자유 분석</button>
 </div>
 
+<!-- ===== 음역 캘리브레이션 (선택) ===== -->
+<div class="card" id="calibCard">
+  <h2>🎚️ 내 음역 맞추기 <span style="font-size:11px;color:#7a8296;font-weight:500;">(선택 · 안 해도 채점 때 자동 보정)</span></h2>
+  <div class="calib-status" id="calibStatus">아직 기준음이 없어요. 편한 음역으로 목표를 맞추려면 아래 버튼을 눌러 "아~"를 2초 불러보세요.</div>
+  <button class="btn-sec" id="calibBtn" style="margin-top:10px;">🎤 편한 음으로 "아~" 2초 (기준음 잡기)</button>
+  <button class="btn-sec hidden" id="calibClearBtn" style="margin-top:8px;">기준음 지우기 (기본 옥타브로)</button>
+  <div class="calib-time hidden" id="calibTime">0.0s</div>
+  <p class="sub" style="margin:10px 0 0;">기준음을 잡으면 <b>목표 멜로디 듣기·채점이 당신 음역으로 이동</b>합니다. 남녀 상관없이 자기 키로 연습.</p>
+</div>
+
 <!-- ===== 따라부르기: 목표 멜로디 ===== -->
 <div class="card" id="followCard">
   <h2>목표 멜로디 고르기</h2>
@@ -180,6 +200,7 @@
     <div class="score-num" id="scoreNum">–</div>
     <div class="score-lbl" id="scoreLbl">음정 정확도</div>
     <div class="score-sub" id="scoreSub"></div>
+    <div class="octave-note" id="octaveNote" style="display:none;"></div>
     <div class="compare" id="compareTxt"></div>
   </div>
 
@@ -486,6 +507,46 @@ var MELODIES = [
 ];
 var currentMel = MELODIES[1];
 
+/* ==================================================================
+   ★ 음역 캘리브레이션 (localStorage)
+   - 유저가 "아~" 낸 편한 음(중앙 Hz)을 기준음으로 저장.
+   - 멜로디를 이 기준음에 가장 가까운 옥타브로 이동시키는 시프트를 계산.
+   - 이 시프트는 "듣기(오실레이터) / 음 표시 / 채점 목표 초기값"에 반영.
+   - 캘리브레이션이 없으면 시프트 0(기본 옥타브). 그래도 채점 때
+     decideOctaveShift가 자동 보정하므로 안전.
+   ================================================================== */
+var CALIB_KEY = "pitchmirror_calib_v1";
+var userBaseMidi = null; // 캘리브레이션 기준음(midi, 소수 가능)
+
+function loadCalib(){
+  try{
+    var raw = localStorage.getItem(CALIB_KEY);
+    if(raw){ var o=JSON.parse(raw); if(o && typeof o.midi==="number") userBaseMidi=o.midi; }
+  }catch(e){}
+}
+function saveCalib(midi){
+  userBaseMidi = midi;
+  try{ localStorage.setItem(CALIB_KEY, JSON.stringify({midi:midi, ts:Date.now()})); }catch(e){}
+}
+function clearCalib(){
+  userBaseMidi = null;
+  try{ localStorage.removeItem(CALIB_KEY); }catch(e){}
+}
+
+// 현재 멜로디를 캘리브레이션 기준음에 맞추는 옥타브 시프트(cent, 12*100의 배수).
+// 기준음 없으면 0. 멜로디 중앙 midi가 기준음에서 가장 가까운 옥타브로 오도록.
+function calibShiftCent(){
+  if(userBaseMidi===null) return 0;
+  var midis = currentMel.seq.map(function(s){return s.midi;});
+  var melMidCenter = (Math.min.apply(null,midis)+Math.max.apply(null,midis))/2;
+  // melMidCenter + 12*oct 이 userBaseMidi에 가장 가깝게 되는 정수 oct
+  var oct = Math.round((userBaseMidi - melMidCenter)/12);
+  return oct*1200;
+}
+
+// 캘리브레이션(또는 시프트) 적용된 재생용 midi
+function shiftedMidi(midi){ return midi + Math.round(calibShiftCent()/100); }
+
 var melPicker = document.getElementById("melPicker");
 var melNotes = document.getElementById("melNotes");
 var melInfo = document.getElementById("melInfo");
@@ -500,14 +561,16 @@ function renderMelPicker(){
     melPicker.appendChild(b);
   });
   melNotes.innerHTML="";
+  var shifted = (calibShiftCent()!==0);
   currentMel.seq.forEach(function(s,i){
     var sp=document.createElement("span");
-    sp.textContent=midiName(s.midi);
+    sp.textContent=midiName(shiftedMidi(s.midi));
     sp.setAttribute("data-i", i);
     melNotes.appendChild(sp);
   });
   var total=currentMel.seq.reduce(function(a,s){return a+s.dur;},0);
-  melInfo.textContent = currentMel.desc + "  (총 "+total.toFixed(1)+"초)";
+  melInfo.textContent = currentMel.desc + "  (총 "+total.toFixed(1)+"초)"
+    + (shifted ? "  · 🎚️ 당신 음역으로 "+(calibShiftCent()>0?"+":"")+(calibShiftCent()/1200)+"옥타브 이동됨" : "");
 }
 
 /* ==================================================================
@@ -524,6 +587,8 @@ function setMode(m){
   tabFree.classList.toggle("on", m==="free");
   followCard.classList.toggle("hidden", m!=="follow");
   freeCard.classList.toggle("hidden", m==="free"?false:true);
+  var cc=document.getElementById("calibCard");
+  if(cc) cc.classList.toggle("hidden", m!=="follow"); // 캘리브레이션은 따라부르기에서만
   resetResultForNewTake();
   prevScore=null; // 모드 바꾸면 전/후 비교 초기화
 }
@@ -544,7 +609,7 @@ document.getElementById("playMel").addEventListener("click", function(){
       var osc=toneCtx.createOscillator();
       var g=toneCtx.createGain();
       osc.type="triangle";
-      osc.frequency.value=noteToFreq(s.midi);
+      osc.frequency.value=noteToFreq(shiftedMidi(s.midi));
       g.gain.setValueAtTime(0.0001, t);
       g.gain.exponentialRampToValueAtTime(0.22, t+0.03);
       g.gain.setValueAtTime(0.22, t+s.dur-0.06);
@@ -1189,40 +1254,138 @@ function showLowData(ratio){
   rc.style.opacity="";
 }
 
-/* ---------- 따라부르기 분석 ---------- */
-function analyzeFollow(frames, voiced, voicedRatio){
-  // 목표 멜로디 총 길이 vs 녹음 유효 구간을 시간 정렬.
-  // 유저가 목표보다 늦게 시작/일찍 시작할 수 있으니, 첫 유성 프레임을 시작점으로 정렬.
+/* ==================================================================
+   ★ 옥타브 자동 정렬 (핵심 신규 로직)
+   ------------------------------------------------------------------
+   문제: 목표음(C4~G4)이 남성 음역엔 높아서 유저가 자연스럽게 1옥타브
+   아래로 부름. CREPE는 그걸 정확히 잡는데, 목표와 비교하니 전부 -1200cent로
+   "틀렸다"고 나옴. → 유저는 정확히 불렀는데 0점.
+
+   해결: 유저가 부른 음정 중앙값 vs 목표 멜로디 중앙값의 옥타브 차이(정수)를
+   감지해서, 목표를 유저 옥타브로 옮긴 뒤 채점.
+
+   "진짜 틀림"과 "옥타브만 다름" 구분:
+   - 후보 옥타브 시프트(-2..+2)마다, 그 시프트를 적용했을 때 각 목표음과
+     유저음의 오차 절대값 평균을 구함.
+   - 오차합이 가장 작아지는 시프트를 고름.
+   - 단, 시프트=0(그대로)와 최적 시프트의 오차 차이가 충분히 크고(옥타브만큼),
+     최적 시프트에서 잔차(개별 음 오차 흩어짐)가 작아야 "옥타브 이동"으로 인정.
+     잔차가 여전히 크면 = 옥타브가 아니라 실제로 제각각 틀린 것 → 시프트 안 함.
+   ================================================================== */
+
+// 각 목표음 구간의 유저 중앙 cent를 먼저 구한다(시프트 적용 전).
+// 반환: [{midi, targetCentBase, medianCent(or null)}] + 세그 시간정보
+function measureUserSegments(frames, voiced){
   var firstVoicedT = voiced[0].t;
   var lastVoicedT = voiced[voiced.length-1].t;
   var sungDur = lastVoicedT - firstVoicedT;
   var melTotal = currentMel.seq.reduce(function(a,s){return a+s.dur;},0);
-  // 시간 스케일: 유저가 부른 총 길이를 목표 길이에 맞춰 신축(템포 차이 흡수)
   var scale = sungDur > 0.3 ? (melTotal / sungDur) : 1;
 
-  // 각 목표 음 구간에 해당하는 유저 프레임 모으기
-  var segResults=[];
-  var cursor=0; // 목표 누적 시간
-  currentMel.seq.forEach(function(s, si){
-    var segStart = cursor, segEnd = cursor+s.dur;
-    cursor=segEnd;
-    // 구간 안쪽 60%만 사용(전이 구간 배제)
-    var inStart = segStart + s.dur*0.2, inEnd = segEnd - s.dur*0.2;
+  var segs=[];
+  var cursor=0;
+  currentMel.seq.forEach(function(s){
+    var segStart=cursor, segEnd=cursor+s.dur; cursor=segEnd;
+    var inStart=segStart+s.dur*0.2, inEnd=segEnd-s.dur*0.2;
     var segCents=[];
     frames.forEach(function(f){
       if(f.cent===null) return;
-      var mapped = (f.t - firstVoicedT)*scale; // 목표 시간축으로 매핑
+      var mapped=(f.t-firstVoicedT)*scale;
       if(mapped>=inStart && mapped<inEnd) segCents.push(f.cent);
     });
-    var medCent = median(segCents);
-    var tgtCent = midiToAbsCent(s.midi);
-    segResults.push({
-      midi:s.midi, targetCent:tgtCent,
-      medianCent:medCent,
-      err: medCent===null ? null : (medCent - tgtCent),
+    segs.push({
+      midi:s.midi,
+      // 캘리브레이션이 있으면 목표 출발점을 유저 음역으로 이미 이동시켜둔다.
+      // (그 위에서 decideOctaveShift가 남은 옥타브 차이를 추가로 보정)
+      targetCentBase: midiToAbsCent(s.midi) + calibShiftCent(),
+      medianCent: median(segCents),
       jitter: segCents.length>=2 ? stddev(segCents) : null,
       n: segCents.length
     });
+  });
+  return { segs:segs, firstVoicedT:firstVoicedT, scale:scale, melTotal:melTotal };
+}
+
+// 옥타브 시프트 자동 결정.
+// segs: measureUserSegments의 결과 배열(유저 medianCent 포함).
+// 반환: { shiftSemitone, applied(bool), reason, residStd, base0Err, bestErr }
+//   shiftSemitone = 목표에 더할 cent (12*octave*100 형태, 옥타브 단위만).
+function decideOctaveShift(segs){
+  var valid = segs.filter(function(s){ return s.medianCent!==null; });
+  if(valid.length < 2){
+    return { shiftSemitone:0, applied:false, reason:"유효 음 부족(2개 미만) → 보정 안 함", residStd:null, base0Err:null, bestErr:null };
+  }
+  // 각 후보 옥타브 시프트(±2옥타브)에 대해 평균 절대오차 + 잔차 std 계산.
+  // 오차 = (유저음) - (목표음 + shiftCent). 잔차 = 각 오차 - (오차들의 중앙값)
+  var candidates = [-2,-1,0,1,2];
+  var results = candidates.map(function(oct){
+    var shiftCent = oct*1200;
+    var errs = valid.map(function(s){ return s.medianCent - (s.targetCentBase + shiftCent); });
+    var absMean = errs.reduce(function(a,e){return a+Math.abs(e);},0)/errs.length;
+    var medErr = median(errs);
+    var resid = errs.map(function(e){ return e - medErr; });
+    var rStd = stddev(resid);
+    return { oct:oct, shiftCent:shiftCent, absMean:absMean, residStd:rStd, medErr:medErr };
+  });
+  // 최소 절대오차 후보
+  var best = results[0];
+  results.forEach(function(r){ if(r.absMean < best.absMean) best=r; });
+  var base0 = results.find ? results.find(function(r){return r.oct===0;}) : results[2];
+
+  // 시프트=0이면 그대로.
+  if(best.oct===0){
+    return { shiftSemitone:0, applied:false,
+      reason:"유저가 이미 목표 옥타브로 부름 → 보정 불필요",
+      residStd:best.residStd, base0Err:base0.absMean, bestErr:best.absMean };
+  }
+
+  // "옥타브만 다름" 판정 조건:
+  //  (1) 시프트로 평균오차가 크게 줄어야 함(옥타브≈1200cent만큼 개선).
+  //  (2) 시프트 후 잔차 std가 작아야 함(개별 음이 흩어져 있으면 진짜 틀린 것).
+  var improved = (base0.absMean - best.absMean); // 얼마나 개선됐나(cent)
+  var RESID_OK = 90;   // 잔차 std가 이 이하면 "음정선은 맞고 옥타브만 다름"으로 봄(반음<100)
+  var IMPROVE_MIN = 400; // 최소 이만큼(약 1/3옥타브 이상) 개선돼야 옥타브 보정으로 인정
+
+  if(improved >= IMPROVE_MIN && best.residStd <= RESID_OK){
+    return { shiftSemitone:best.shiftCent, applied:true,
+      reason:(best.oct>0?"+":"")+best.oct+"옥타브 이동 감지 → 목표를 유저 음역으로 맞춰 채점",
+      residStd:best.residStd, base0Err:base0.absMean, bestErr:best.absMean };
+  }
+  // 개선은 됐지만 잔차가 커서 옥타브가 아니라 실제 오류로 판단 → 보정 안 함.
+  return { shiftSemitone:0, applied:false,
+    reason: improved>=IMPROVE_MIN
+      ? "옥타브 후보는 있으나 음들이 제각각 흩어짐(잔차 ±"+best.residStd.toFixed(0)+"cent) → 실제 음정 오류로 채점"
+      : "옥타브 차이라 볼 만큼 일관되지 않음 → 그대로 채점",
+    residStd:best.residStd, base0Err:base0.absMean, bestErr:best.absMean };
+}
+
+var lastOctaveShift = null; // 디버그/표시용 마지막 시프트 결과
+
+/* ---------- 따라부르기 분석 ---------- */
+function analyzeFollow(frames, voiced, voicedRatio){
+  // ① 각 목표음 구간의 유저 중앙 cent를 먼저 측정(시프트 적용 전).
+  var m = measureUserSegments(frames, voiced);
+  var firstVoicedT = m.firstVoicedT, scale = m.scale, melTotal = m.melTotal;
+
+  // ② 옥타브 자동 정렬: 유저가 일관되게 N옥타브 아래/위로 불렀으면 목표를 그리로 이동.
+  //    "제각각 틀림"은 보정 안 함(decideOctaveShift 내부에서 잔차로 구분).
+  var shiftDec = decideOctaveShift(m.segs);
+  lastOctaveShift = shiftDec;
+  var shiftCent = shiftDec.applied ? shiftDec.shiftSemitone : 0;
+
+  // ③ 이동된 목표 기준으로 오차 재계산.
+  var segResults = m.segs.map(function(s){
+    var tgtCent = s.targetCentBase + shiftCent; // ★ 유저 음역으로 이동된 목표
+    var medCent = s.medianCent;
+    return {
+      midi:s.midi,
+      targetMidiShifted: Math.round(69 + (tgtCent-6900)/100), // 표시용(이동된 목표음)
+      targetCent:tgtCent,
+      medianCent:medCent,
+      err: medCent===null ? null : (medCent - tgtCent),
+      jitter:s.jitter,
+      n:s.n
+    };
   });
 
   // 점수: 각 구간 |cent 오차| -> 감점. 100 - 평균오차*계수. 무효 구간 제외.
@@ -1238,7 +1401,8 @@ function analyzeFollow(frames, voiced, voicedRatio){
   renderResult({
     mode:"follow", score:score, segResults:segResults, validSegs:validSegs,
     avgAbsErr:avgAbsErr, frames:frames, voiced:voiced, voicedRatio:voicedRatio,
-    firstVoicedT:firstVoicedT, scale:scale, melTotal:melTotal
+    firstVoicedT:firstVoicedT, scale:scale, melTotal:melTotal,
+    shiftDec:shiftDec, shiftCent:shiftCent
   });
 }
 
@@ -1407,7 +1571,31 @@ function renderResult(R){
     }
     prevScore=R.score;
     renderSegTable(R.segResults);
+
+    // ★ 옥타브 자동 정렬 안내
+    var oNote=document.getElementById("octaveNote");
+    var dec=R.shiftDec;
+    if(dec){
+      oNote.style.display="block";
+      if(dec.applied){
+        var oct = Math.round(dec.shiftSemitone/1200);
+        // 이동된 목표음 범위(첫음 기준)로 안내
+        var firstShifted = R.segResults[0].targetMidiShifted;
+        oNote.className="octave-note shift";
+        oNote.innerHTML="🎚️ <b>당신 음역에 맞춰 목표를 "+(oct>0?"+"+oct:oct)+"옥타브 이동</b>해서 채점했어요. "
+          +"(예: 첫 목표음이 <b>"+midiName(firstShifted)+"</b>) 편한 음으로 불러도 정확히 채점됩니다.";
+      } else if(dec.reason && dec.reason.indexOf("제각각")>=0){
+        oNote.className="octave-note reject";
+        oNote.innerHTML="⚠️ 옥타브 후보는 있었지만 <b>음들이 제각각 흩어져</b>(잔차 ±"+(dec.residStd!=null?dec.residStd.toFixed(0):"?")+"cent) 실제 음정 오류로 채점했어요.";
+      } else {
+        oNote.className="octave-note same";
+        oNote.innerHTML="✅ 목표 옥타브 그대로 채점 (자동 이동 불필요).";
+      }
+    } else {
+      oNote.style.display="none";
+    }
   } else {
+    document.getElementById("octaveNote").style.display="none";
     document.getElementById("resultTitle").textContent="🎙️ 자유 분석 (안정성 리포트)";
     // 점수 대신 안정성 등급
     var stabScore = R.flatStd===null ? null : Math.round(Math.max(0,Math.min(100,100 - R.flatStd/0.5)));
@@ -1428,9 +1616,18 @@ function renderResult(R){
 function renderSegTable(segs){
   var t=document.getElementById("segTable");
   var html="<tr><th>목표음</th><th>내 음</th><th>오차</th><th>흔들림</th></tr>";
+  // 이동된 목표음이 있으면 그걸 표시(유저가 실제로 부른 옥타브 기준)
+  function tgtLabel(r){
+    var shown = (r.targetMidiShifted!=null) ? r.targetMidiShifted : r.midi;
+    var base = midiName(shown);
+    if(r.targetMidiShifted!=null && r.targetMidiShifted!==r.midi){
+      return base+"<div style='font-size:10px;color:#6a7288;font-weight:500;'>원래 "+midiName(r.midi)+"</div>";
+    }
+    return base;
+  }
   segs.forEach(function(r){
     if(r.err===null){
-      html+="<tr><td class='seg-note'>"+midiName(r.midi)+"</td><td colspan='3' style='color:#7a8296'>분석 불가 (무성음/미검출)</td></tr>";
+      html+="<tr><td class='seg-note'>"+tgtLabel(r)+"</td><td colspan='3' style='color:#7a8296'>분석 불가 (무성음/미검출)</td></tr>";
       return;
     }
     var absErr=Math.abs(r.err);
@@ -1440,7 +1637,7 @@ function renderSegTable(segs){
     // 내가 낸 음 이름
     var myMidi=Math.round(69 + (r.medianCent-6900)/100);
     html+="<tr>"
-      +"<td class='seg-note'>"+midiName(r.midi)+"</td>"
+      +"<td class='seg-note'>"+tgtLabel(r)+"</td>"
       +"<td>"+midiName(myMidi)+"</td>"
       +"<td><span class='pill' style='background:"+bg+";color:"+color+"'>"+(r.err>0?"+":"")+r.err.toFixed(0)+" "+dir+"</span></td>"
       +"<td style='color:#8a91a3'>"+(r.jitter!==null?"±"+r.jitter.toFixed(0):"–")+"</td>"
@@ -1662,8 +1859,112 @@ function resetResultForNewTake(){
 }
 
 /* ==================================================================
+   ★ 음역 캘리브레이션 녹음/분석
+   - 편한 "아~"를 약 2초 녹음 → 피치 추출 → 유효 프레임 중앙 Hz → 기준음 저장.
+   - 추출은 채점과 같은 파이프라인(CREPE 우선, 실패 시 YIN 폴백) 재사용.
+   ================================================================== */
+var calibBtn = document.getElementById("calibBtn");
+var calibClearBtn = document.getElementById("calibClearBtn");
+var calibStatusEl = document.getElementById("calibStatus");
+var calibTimeEl = document.getElementById("calibTime");
+var calibRecording = false;
+
+function renderCalibStatus(){
+  if(userBaseMidi!==null){
+    var nm = midiName(Math.round(userBaseMidi));
+    calibStatusEl.className = "calib-status set";
+    calibStatusEl.innerHTML = "✅ 당신의 기준음: <b>"+nm+"</b> ("+noteToFreq(userBaseMidi).toFixed(0)+"Hz). "
+      + "목표 멜로디를 여기 맞춰 이동했어요.";
+    calibClearBtn.classList.remove("hidden");
+  } else {
+    calibStatusEl.className = "calib-status";
+    calibStatusEl.textContent = "아직 기준음이 없어요. 편한 음역으로 목표를 맞추려면 아래 버튼을 눌러 \"아~\"를 2초 불러보세요.";
+    calibClearBtn.classList.add("hidden");
+  }
+}
+
+// 캘리브레이션 전용 짧은 녹음(약 2.2초 자동 정지)
+async function runCalibration(){
+  if(calibRecording) return;
+  var ok = await ensureMic();
+  if(!ok){ calibStatusEl.textContent="⚠️ 마이크를 못 열었어요. HTTPS/권한 확인."; return; }
+  calibRecording = true;
+  calibBtn.disabled = true;
+  calibBtn.textContent = "🎤 녹음 중… 편하게 아~";
+  calibTimeEl.classList.remove("hidden");
+
+  var chunks=[];
+  var src = audioCtx.createMediaStreamSource(micStream);
+  var proc = audioCtx.createScriptProcessor(4096,1,1);
+  proc.onaudioprocess=function(e){
+    if(!calibRecording) return;
+    chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+  };
+  src.connect(proc);
+  var silent=audioCtx.createGain(); silent.gain.value=0;
+  proc.connect(silent); silent.connect(audioCtx.destination);
+
+  var t0=performance.now();
+  var DUR=2.2;
+  await new Promise(function(resolve){
+    (function tick(){
+      var el=(performance.now()-t0)/1000;
+      calibTimeEl.textContent=el.toFixed(1)+"s";
+      if(el>=DUR){ resolve(); return; }
+      requestAnimationFrame(tick);
+    })();
+  });
+  calibRecording=false;
+  proc.disconnect(); proc.onaudioprocess=null; src.disconnect();
+
+  // 합치기
+  var total=0; chunks.forEach(function(c){total+=c.length;});
+  var merged=new Float32Array(total); var off=0;
+  chunks.forEach(function(c){ merged.set(c,off); off+=c.length; });
+
+  calibBtn.textContent="🧠 분석 중…";
+  var norm = normalizeSamples(merged);
+  var frames=null;
+  try{
+    var okC = await ensureCrepe(function(msg){ calibStatusEl.textContent="🧠 "+msg; });
+    if(okC){ frames = await extractPitchTrackCrepe(norm, recSampleRate, FRAME_MS); }
+  }catch(e){ frames=null; }
+  if(!frames || frames.length===0){
+    frames = extractPitchTrack(norm, recSampleRate);
+  }
+  var voiced = frames.filter(function(f){ return f.cent!==null; });
+
+  calibBtn.disabled=false;
+  calibBtn.textContent="🎤 편한 음으로 \"아~\" 2초 (기준음 잡기)";
+  calibTimeEl.classList.add("hidden");
+
+  if(voiced.length < 5){
+    calibStatusEl.className="calib-status";
+    calibStatusEl.innerHTML="⚠️ 음정이 충분히 안 잡혔어요(유효 "+voiced.length+"프레임). 마이크 가까이, 조용한 곳에서 <b>또렷하게</b> 다시 \"아~\" 불러주세요.";
+    return;
+  }
+  // 유효 프레임 cent 중앙값 → midi (연속값)
+  var medCent = median(voiced.map(function(f){ return f.cent; }));
+  var midi = 69 + (medCent-6900)/100;
+  saveCalib(midi);
+  renderCalibStatus();
+  renderMelPicker();     // 음 표시/시프트 갱신
+  resetResultForNewTake();
+}
+
+calibBtn.addEventListener("click", runCalibration);
+calibClearBtn.addEventListener("click", function(){
+  clearCalib();
+  renderCalibStatus();
+  renderMelPicker();
+  resetResultForNewTake();
+});
+
+/* ==================================================================
    초기화
    ================================================================== */
+loadCalib();
+renderCalibStatus();
 renderMelPicker();
 </script>
 </body>
