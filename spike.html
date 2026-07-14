@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>음정거울 · 기술검증 스파이크</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; background: #0c0e14; color: #e8ecf4;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { padding: 16px 14px 40px; max-width: 560px; margin: 0 auto; }
+  h1 { font-size: 17px; margin: 0 0 4px; font-weight: 700; }
+  .sub { font-size: 12px; color: #8a91a3; margin: 0 0 14px; line-height: 1.5; }
+  button { font-size: 15px; font-weight: 700; border: 0; border-radius: 12px;
+    padding: 14px 18px; width: 100%; cursor: pointer; }
+  .btn-main { background: #3b6dff; color: #fff; }
+  .btn-main:active { background: #2d55cc; }
+  .btn-sec { background: #1a1e2b; color: #cdd3e0; border: 1px solid #2a3040; margin-top: 8px; }
+  .card { background: #12151f; border: 1px solid #202538; border-radius: 16px;
+    padding: 16px; margin-top: 12px; }
+
+  /* --- 메인 음정 표시 --- */
+  .note-big { font-size: 72px; font-weight: 800; line-height: 1; text-align: center;
+    letter-spacing: -2px; }
+  .note-idle { color: #3a4056; }
+  .row-info { display: flex; justify-content: space-around; margin-top: 10px; text-align: center; }
+  .row-info .lbl { font-size: 11px; color: #7a8296; }
+  .row-info .val { font-size: 20px; font-weight: 700; margin-top: 2px; }
+
+  /* --- cent 오차 미터 --- */
+  .meter-wrap { margin-top: 16px; }
+  .meter-track { position: relative; height: 44px; background: #0a0c12;
+    border-radius: 10px; border: 1px solid #202538; overflow: hidden; }
+  .meter-center { position: absolute; left: 50%; top: 0; bottom: 0; width: 2px;
+    background: #4a5372; transform: translateX(-1px); }
+  .meter-zone { position: absolute; top: 0; bottom: 0; left: 45%; width: 10%;
+    background: rgba(60,220,130,0.10); }
+  .meter-needle { position: absolute; top: 4px; bottom: 4px; width: 6px; border-radius: 3px;
+    background: #3b6dff; left: 50%; transform: translateX(-3px);
+    transition: left 0.05s linear, background 0.1s; }
+  .meter-scale { display: flex; justify-content: space-between; font-size: 10px;
+    color: #5a627a; margin-top: 4px; padding: 0 2px; }
+  .cent-txt { text-align: center; font-size: 15px; font-weight: 700; margin-top: 8px; }
+
+  /* --- 안정성(흔들림) 미터 --- */
+  .stab-wrap { margin-top: 14px; }
+  .stab-row { display: flex; align-items: center; gap: 10px; }
+  .stab-row .lbl { font-size: 12px; color: #8a91a3; width: 70px; flex-shrink: 0; }
+  .bar-bg { flex: 1; height: 12px; background: #0a0c12; border-radius: 6px;
+    border: 1px solid #202538; overflow: hidden; }
+  .bar-fill { height: 100%; width: 0%; border-radius: 6px; transition: width 0.08s, background 0.15s; }
+
+  /* --- 신호세기 --- */
+  .rms-txt { font-size: 11px; color: #7a8296; text-align: center; margin-top: 10px; }
+
+  /* --- 따라부르기 테스트 --- */
+  .target-big { font-size: 40px; font-weight: 800; text-align: center; letter-spacing: -1px; }
+  .target-hz { text-align: center; font-size: 12px; color: #8a91a3; margin-top: 2px; }
+  .target-feedback { text-align: center; font-size: 16px; font-weight: 700; margin-top: 10px;
+    min-height: 22px; }
+  .tone-controls { display: flex; gap: 8px; margin-top: 12px; }
+  .tone-controls button { flex: 1; font-size: 13px; padding: 11px 8px; }
+  .target-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .target-picker button { width: auto; flex: 0 0 auto; padding: 8px 12px; font-size: 13px;
+    background: #1a1e2b; color: #cdd3e0; border: 1px solid #2a3040; }
+  .target-picker button.on { background: #3b6dff; color: #fff; border-color: #3b6dff; }
+
+  .checklist { font-size: 13px; line-height: 1.7; color: #c2c8d6; }
+  .checklist li { margin-bottom: 4px; }
+  .warn { font-size: 12px; color: #ffb454; line-height: 1.6; }
+  h2 { font-size: 14px; margin: 0 0 8px; color: #aeb6c9; }
+  .lat { text-align:center; font-size:11px; color:#5a627a; margin-top:8px; }
+  code { background:#1a1e2b; padding:1px 5px; border-radius:4px; font-size:12px; }
+</style>
+</head>
+<body>
+
+<h1>음정거울 · 기술검증 스파이크</h1>
+<p class="sub">브라우저 마이크로 실시간 음정을 얼마나 정확·안정적으로 잡는지 확인용. 예쁜 UI 아님. 숫자와 미터의 흔들림을 보고 판단.</p>
+
+<button id="startBtn" class="btn-main">🎤 마이크 켜고 검증 시작</button>
+<button id="stopBtn" class="btn-sec" style="display:none;">■ 정지</button>
+<p id="status" class="sub" style="margin-top:10px;"></p>
+
+<!-- 메인 음정 표시 -->
+<div class="card" id="mainCard" style="display:none;">
+  <div id="noteBig" class="note-big note-idle">–</div>
+  <div class="row-info">
+    <div><div class="lbl">주파수</div><div class="val" id="hzVal">–</div></div>
+    <div><div class="lbl">옥타브</div><div class="val" id="octVal">–</div></div>
+    <div><div class="lbl">정확음</div><div class="val" id="refVal">–</div></div>
+  </div>
+
+  <div class="meter-wrap">
+    <div class="meter-track">
+      <div class="meter-zone"></div>
+      <div class="meter-center"></div>
+      <div class="meter-needle" id="needle"></div>
+    </div>
+    <div class="meter-scale"><span>-50</span><span>-25</span><span>0 (정확)</span><span>+25</span><span>+50 cent</span></div>
+    <div class="cent-txt" id="centTxt">–</div>
+  </div>
+
+  <div class="stab-wrap">
+    <div class="stab-row">
+      <div class="lbl">안정도</div>
+      <div class="bar-bg"><div class="bar-fill" id="stabBar"></div></div>
+    </div>
+    <div class="stab-row" style="margin-top:8px;">
+      <div class="lbl">신호세기</div>
+      <div class="bar-bg"><div class="bar-fill" id="rmsBar" style="background:#5a627a;"></div></div>
+    </div>
+  </div>
+  <div class="rms-txt" id="rmsTxt"></div>
+  <div class="lat" id="latTxt"></div>
+</div>
+
+<!-- 따라부르기 테스트 -->
+<div class="card" id="testCard" style="display:none;">
+  <h2>🎯 목표 음 따라부르기 (서비스 핵심 맛보기)</h2>
+  <div class="target-big" id="targetNote">A3</div>
+  <div class="target-hz" id="targetHz"></div>
+  <div class="target-feedback" id="targetFb">목표 음을 골라 소리 들어보고, 같은 음을 내보세요</div>
+  <div class="tone-controls">
+    <button class="btn-sec" id="playTone" style="margin-top:0;">🔊 목표음 듣기</button>
+    <button class="btn-sec" id="stopTone" style="margin-top:0;">🔇 끄기</button>
+  </div>
+  <div class="target-picker" id="picker"></div>
+</div>
+
+<!-- 체크리스트 -->
+<div class="card">
+  <h2>✅ 이 프로토타입으로 오너가 확인할 것</h2>
+  <ul class="checklist">
+    <li><b>정확한가</b> — 피아노/튜너앱 옆에 두고 같은 음 낼 때 음이름·Hz가 맞나</li>
+    <li><b>반응 빠른가</b> — 소리 내자마자 바뀌나 (하단 지연 ms 참고)</li>
+    <li><b>조용한 곳 vs 시끄러운 곳</b> — 배경소음 있을 때 숫자가 마구 튀나</li>
+    <li><b>저음·고음</b> — 낮은 남성 목소리(~80~150Hz), 높은 음에서 흔들림/옥타브 오류</li>
+    <li><b>노래할 때</b> — 비브라토·이어지는 음에서 안정도 미터가 얼마나 흔들리나</li>
+    <li><b>따라부르기</b> — 목표음 따라 부를 때 cent 오차가 실시간으로 잘 좁혀지나</li>
+  </ul>
+</div>
+
+<!-- 정직한 한계 -->
+<div class="card">
+  <h2>⚠️ 이 기술의 정직한 한계 (반드시 인지)</h2>
+  <p class="warn">
+  • <b>단선율만 됨(모노포닉).</b> 화음/반주/여러 사람 동시엔 안 됨. 노래방 반주 깔면 망가짐 — 반주 없이 목소리만이어야 함.<br>
+  • <b>저음이 어렵다.</b> 남성 저음(80Hz 근처)은 주기가 길어 흔들리거나 한 옥타브 위/아래로 튈 수 있음.<br>
+  • <b>비브라토/글리산도</b>는 음이 계속 움직여 "정확한 한 음"으로 안 잡힘 — 안정도 미터가 이걸 보여줌.<br>
+  • <b>마이크 품질·거리·에코</b>에 크게 의존. 폰마다 다름. 그래서 <b>오너가 직접 여러 기기로 테스트해야 함.</b><br>
+  • <b>배경소음</b>이 크면 오검출. 신호세기 미터가 낮은데 음이 잡히면 노이즈일 수 있음.
+  </p>
+</div>
+
+<!-- 기술 메모 -->
+<div class="card">
+  <h2>🔧 뭘 어떻게 만들었나 (정직 보고)</h2>
+  <p class="sub" style="margin:0;">
+  • 피치 검출: <b>YIN 알고리즘 자체 구현</b>(인라인). autocorrelation보다 옥타브 오류가 적어 선택. CDN 라이브러리 없음 → 오프라인·폰에서도 확실히 열림.<br>
+  • 입력: Web Audio API <code>getUserMedia</code> + <code>AnalyserNode</code>(2048 샘플). 브라우저 기본 노이즈 억제/에코 제거는 <b>끔</b>(원음 정확도 확인 목적).<br>
+  • 안정도: 최근 검출값들의 표준편차(cent)를 미터로 — 낮을수록 안정.<br>
+  • 지연: 검출~화면 반영까지 걸린 프레임 시간을 ms로 표기(체감용, 정밀 측정 아님).<br>
+  • <b>에이전트인 나는 마이크 실동작 테스트 불가</b> → 문법·로직만 확인함. 실제 정확도는 <b>오너가 폰으로 확인해야 함.</b>
+  </p>
+</div>
+
+<script>
+"use strict";
+// ============ 음이름 유틸 ============
+var NOTE_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+function freqToNote(freq){
+  // A4 = 440Hz, MIDI 69
+  var midi = 69 + 12 * Math.log2(freq/440);
+  var midiRound = Math.round(midi);
+  var cents = Math.round((midi - midiRound) * 100);
+  var name = NOTE_NAMES[((midiRound % 12) + 12) % 12];
+  var octave = Math.floor(midiRound/12) - 1;
+  var refFreq = 440 * Math.pow(2, (midiRound - 69)/12);
+  return { name:name, octave:octave, cents:cents, refFreq:refFreq, midi:midiRound };
+}
+function noteToFreq(midi){ return 440 * Math.pow(2, (midi-69)/12); }
+
+// ============ YIN 피치 검출 (자체 구현) ============
+// 참고: de Cheveigné & Kawahara (2002) YIN 알고리즘
+function yinDetect(buf, sampleRate, threshold){
+  var tau, i;
+  var yinBufLen = Math.floor(buf.length/2);
+  var yinBuf = new Float32Array(yinBufLen);
+
+  // 1) difference function
+  for(tau=0; tau<yinBufLen; tau++) yinBuf[tau]=0;
+  for(tau=1; tau<yinBufLen; tau++){
+    for(i=0; i<yinBufLen; i++){
+      var delta = buf[i] - buf[i+tau];
+      yinBuf[tau] += delta*delta;
+    }
+  }
+  // 2) cumulative mean normalized difference
+  yinBuf[0]=1;
+  var running=0;
+  for(tau=1; tau<yinBufLen; tau++){
+    running += yinBuf[tau];
+    yinBuf[tau] *= tau/running;
+  }
+  // 3) absolute threshold
+  var tauEstimate = -1;
+  for(tau=2; tau<yinBufLen; tau++){
+    if(yinBuf[tau] < threshold){
+      while(tau+1 < yinBufLen && yinBuf[tau+1] < yinBuf[tau]) tau++;
+      tauEstimate = tau;
+      break;
+    }
+  }
+  if(tauEstimate === -1) return { freq:-1, prob:0 };
+  var probability = 1 - yinBuf[tauEstimate];
+
+  // 4) parabolic interpolation (정밀 보정)
+  var betterTau;
+  var x0 = (tauEstimate<1)?tauEstimate:tauEstimate-1;
+  var x2 = (tauEstimate+1<yinBufLen)?tauEstimate+1:tauEstimate;
+  if(x0===tauEstimate){
+    betterTau = (yinBuf[tauEstimate]<=yinBuf[x2])?tauEstimate:x2;
+  } else if(x2===tauEstimate){
+    betterTau = (yinBuf[tauEstimate]<=yinBuf[x0])?tauEstimate:x0;
+  } else {
+    var s0=yinBuf[x0], s1=yinBuf[tauEstimate], s2=yinBuf[x2];
+    betterTau = tauEstimate + (s2-s0)/(2*(2*s1-s2-s0));
+  }
+  return { freq: sampleRate/betterTau, prob: probability };
+}
+
+// ============ 오디오 세팅 ============
+var audioCtx=null, analyser=null, micStream=null, rafId=null;
+var buf=null;
+var running=false;
+
+// 안정성 계산용 최근 cent 히스토리
+var centHistory=[]; // {midi, cents}
+var MAX_HIST=12;
+
+var startBtn=document.getElementById("startBtn");
+var stopBtn=document.getElementById("stopBtn");
+var statusEl=document.getElementById("status");
+var mainCard=document.getElementById("mainCard");
+var testCard=document.getElementById("testCard");
+
+var noteBig=document.getElementById("noteBig");
+var hzVal=document.getElementById("hzVal");
+var octVal=document.getElementById("octVal");
+var refVal=document.getElementById("refVal");
+var needle=document.getElementById("needle");
+var centTxt=document.getElementById("centTxt");
+var stabBar=document.getElementById("stabBar");
+var rmsBar=document.getElementById("rmsBar");
+var rmsTxt=document.getElementById("rmsTxt");
+var latTxt=document.getElementById("latTxt");
+var targetFb=document.getElementById("targetFb");
+
+async function start(){
+  try{
+    statusEl.textContent="마이크 권한 요청 중...";
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:false }
+    });
+    audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+    if(audioCtx.state==="suspended") await audioCtx.resume();
+    var src = audioCtx.createMediaStreamSource(micStream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+    src.connect(analyser);
+    buf = new Float32Array(analyser.fftSize);
+    running=true;
+    startBtn.style.display="none";
+    stopBtn.style.display="block";
+    mainCard.style.display="block";
+    testCard.style.display="block";
+    statusEl.textContent="샘플레이트: "+audioCtx.sampleRate+"Hz · 소리를 내보세요";
+    loop();
+  }catch(e){
+    statusEl.textContent="⚠️ 마이크 접근 실패: "+e.message+" (HTTPS 또는 localhost 필요, 브라우저 권한 확인)";
+  }
+}
+
+function stop(){
+  running=false;
+  if(rafId) cancelAnimationFrame(rafId);
+  if(micStream) micStream.getTracks().forEach(function(t){t.stop();});
+  if(audioCtx) audioCtx.close();
+  startBtn.style.display="block";
+  stopBtn.style.display="none";
+  statusEl.textContent="정지됨";
+  centHistory=[];
+}
+
+function rms(b){
+  var s=0; for(var i=0;i<b.length;i++) s+=b[i]*b[i];
+  return Math.sqrt(s/b.length);
+}
+
+function loop(){
+  if(!running) return;
+  var t0 = performance.now();
+  analyser.getFloatTimeDomainData(buf);
+  var level = rms(buf);
+
+  // 신호세기 미터 (rms ~0..0.2 정도를 0..100%로)
+  var rmsPct = Math.min(100, level*600);
+  rmsBar.style.width = rmsPct+"%";
+  rmsBar.style.background = rmsPct>15 ? "#5a8cff" : "#5a627a";
+
+  var res = { freq:-1, prob:0 };
+  // 신호가 어느 정도 있어야 검출 시도 (노이즈 게이트)
+  if(level > 0.008){
+    res = yinDetect(buf, audioCtx.sampleRate, 0.15);
+  }
+
+  if(res.freq > 40 && res.freq < 1600 && res.prob > 0.5){
+    var n = freqToNote(res.freq);
+    noteBig.textContent = n.name + n.octave;
+    noteBig.classList.remove("note-idle");
+    hzVal.textContent = res.freq.toFixed(1);
+    octVal.textContent = n.octave;
+    refVal.textContent = n.refFreq.toFixed(1)+"Hz";
+
+    // cent 오차 미터 (-50..+50 -> 0..100%)
+    var c = Math.max(-50, Math.min(50, n.cents));
+    var pct = (c+50)/100*100;
+    needle.style.left = pct+"%";
+    var absC = Math.abs(n.cents);
+    needle.style.background = absC<=5 ? "#3cdc82" : (absC<=15 ? "#f5c542" : "#ff5a6e");
+    centTxt.textContent = (n.cents>0?"+":"") + n.cents + " cent " +
+      (absC<=5?"(정확 ✓)":(absC<=15?"(살짝 어긋남)":"(많이 어긋남)"));
+    centTxt.style.color = absC<=5 ? "#3cdc82" : (absC<=15 ? "#f5c542" : "#ff5a6e");
+
+    // 안정도: 최근 검출들의 cent 표준편차
+    centHistory.push({midi:n.midi, cents:n.cents});
+    if(centHistory.length>MAX_HIST) centHistory.shift();
+    var stab = computeStability();
+    // stab: cent std. 0이면 완벽, 30cent 이상이면 매우 흔들림
+    var stabScore = Math.max(0, 100 - stab*3.3); // 30cent std -> 0점
+    stabBar.style.width = stabScore+"%";
+    stabBar.style.background = stabScore>70 ? "#3cdc82" : (stabScore>40 ? "#f5c542" : "#ff5a6e");
+
+    rmsTxt.textContent = "prob "+res.prob.toFixed(2)+" · 안정도 흔들림 ±"+stab.toFixed(0)+"cent";
+
+    // 따라부르기 피드백
+    updateTargetFeedback(n, res.freq);
+  } else {
+    noteBig.textContent="–";
+    noteBig.classList.add("note-idle");
+    hzVal.textContent="–"; octVal.textContent="–"; refVal.textContent="–";
+    centTxt.textContent = level>0.008 ? "검출 불확실 (노이즈/화음/무성음?)" : "소리 없음";
+    centTxt.style.color="#7a8296";
+    needle.style.left="50%"; needle.style.background="#3b6dff";
+    stabBar.style.width="0%";
+    rmsTxt.textContent="";
+    if(centHistory.length) centHistory=[];
+    targetFb.textContent = targetActive ? "목표 음을 내보세요..." : "목표 음을 골라 소리 들어보고, 같은 음을 내보세요";
+    targetFb.style.color="#8a91a3";
+  }
+
+  var dt = performance.now()-t0;
+  latTxt.textContent = "1프레임 처리 "+dt.toFixed(1)+"ms (검출 연산). 화면 갱신은 초당 약 "+Math.round(1000/16)+"회";
+
+  rafId = requestAnimationFrame(loop);
+}
+
+function computeStability(){
+  if(centHistory.length<3) return 0;
+  // 같은 음(midi) 위주로 판단하되, 옥타브 튐도 흔들림에 반영
+  var vals = centHistory.map(function(h){ return h.midi*100 + h.cents; }); // 절대 cent 축
+  var mean = vals.reduce(function(a,b){return a+b;},0)/vals.length;
+  var variance = vals.reduce(function(a,b){return a+(b-mean)*(b-mean);},0)/vals.length;
+  return Math.sqrt(variance);
+}
+
+startBtn.addEventListener("click", start);
+stopBtn.addEventListener("click", stop);
+
+// ============ 따라부르기 테스트 ============
+var targetMidi = 57; // A3
+var targetActive = false;
+var targetNoteEl=document.getElementById("targetNote");
+var targetHzEl=document.getElementById("targetHz");
+var picker=document.getElementById("picker");
+
+// 부를만한 음 세트 (남녀 편한 음역대 위주)
+var TARGETS = [
+  {label:"C3", midi:48}, {label:"E3", midi:52}, {label:"G3", midi:55},
+  {label:"A3", midi:57}, {label:"C4(도)", midi:60}, {label:"E4", midi:64},
+  {label:"G4", midi:67}, {label:"A4(라)", midi:69}
+];
+function renderPicker(){
+  picker.innerHTML="";
+  TARGETS.forEach(function(t){
+    var b=document.createElement("button");
+    b.textContent=t.label;
+    if(t.midi===targetMidi) b.className="on";
+    b.addEventListener("click", function(){ setTarget(t.midi); });
+    picker.appendChild(b);
+  });
+}
+function setTarget(midi){
+  targetMidi=midi;
+  var n=freqToNote(noteToFreq(midi));
+  targetNoteEl.textContent=n.name+n.octave;
+  targetHzEl.textContent="목표 "+noteToFreq(midi).toFixed(1)+"Hz";
+  renderPicker();
+}
+function updateTargetFeedback(detectedNote, freq){
+  targetActive=true;
+  // 검출된 절대 cent vs 목표 절대 cent
+  var detAbs = detectedNote.midi*100 + detectedNote.cents;
+  var tgtAbs = targetMidi*100;
+  var diff = detAbs - tgtAbs; // + 높음, - 낮음
+  var absDiff=Math.abs(diff);
+  var msg, color;
+  if(absDiff<=10){ msg="🎯 정확해요! (±"+Math.round(absDiff)+"cent)"; color="#3cdc82"; }
+  else if(absDiff<=40){ msg=(diff>0?"조금 높아요 ↓ ":"조금 낮아요 ↑ ")+"(±"+Math.round(absDiff)+"cent)"; color="#f5c542"; }
+  else if(absDiff<=150){ msg=(diff>0?"높아요 ▼ 내려요 ":"낮아요 ▲ 올려요 ")+"("+Math.round(absDiff)+"cent)"; color="#ff9a3c"; }
+  else { msg=(diff>0?"많이 높음 ▼▼":"많이 낮음 ▲▲")+" (다른 옥타브일 수도)"; color="#ff5a6e"; }
+  targetFb.textContent=msg;
+  targetFb.style.color=color;
+}
+
+// 목표음 재생 (오실레이터)
+var toneOsc=null, toneCtx=null;
+document.getElementById("playTone").addEventListener("click", function(){
+  try{
+    if(!toneCtx) toneCtx=new (window.AudioContext||window.webkitAudioContext)();
+    if(toneCtx.state==="suspended") toneCtx.resume();
+    if(toneOsc){ toneOsc.stop(); toneOsc=null; }
+    toneOsc=toneCtx.createOscillator();
+    var g=toneCtx.createGain();
+    g.gain.value=0.15;
+    toneOsc.type="sine";
+    toneOsc.frequency.value=noteToFreq(targetMidi);
+    toneOsc.connect(g); g.connect(toneCtx.destination);
+    toneOsc.start();
+    setTimeout(function(){ if(toneOsc){toneOsc.stop(); toneOsc=null;} }, 1500);
+  }catch(e){}
+});
+document.getElementById("stopTone").addEventListener("click", function(){
+  if(toneOsc){ toneOsc.stop(); toneOsc=null; }
+});
+
+// 초기화
+setTarget(57);
+</script>
+</body>
+</html>
