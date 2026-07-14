@@ -413,8 +413,12 @@ async function ensureMic(){
   if(micStream) return true;
   try{
     recStatus.textContent="마이크 권한 요청 중...";
+    // AGC(자동게인) ON: 작은 목소리를 마이크 단에서 알아서 키움.
+    //   트레이드오프: AGC가 조용한 구간의 노이즈를 끌어올릴 수 있고, 순간 게인 변동이
+    //   생길 수 있음. 단 음정(주파수)은 안 바꾸므로 진단 정확도엔 영향 작음.
+    // echoCancellation/noiseSuppression은 스펙트럼 왜곡 → 음정 흔들 수 있어 계속 OFF.
     micStream = await navigator.mediaDevices.getUserMedia({
-      audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:false }
+      audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:true }
     });
     audioCtx = new (window.AudioContext||window.webkitAudioContext)();
     if(audioCtx.state==="suspended") await audioCtx.resume();
@@ -625,6 +629,16 @@ function renderDebug(){
   html += row("평균 볼륨(RMS)", d.globalRms.toFixed(4)+ (d.globalRms<0.003?"  ← 무음 의심!":""), rmsCls);
   html += row("소리 있는 샘플 비율", (d.loudRatio*100).toFixed(1)+"%");
 
+  // 정규화 결과(분석을 눌렀을 때만 채워짐)
+  if(lastNormInfo){
+    var ni=lastNormInfo;
+    html += "<h3 style='margin-top:12px;'>①-b 볼륨 정규화 (분석 전 크기만 키움)</h3>";
+    html += row("적용 게인", "×"+ni.gain.toFixed(1)+ (ni.gain>=NORM_MAX_GAIN?" (상한)":""),
+      ni.gain>=NORM_MAX_GAIN?"warnc":"good");
+    html += row("peak  전 → 후", ni.peakBefore.toFixed(4)+"  →  "+ni.peakAfter.toFixed(4), "good");
+    html += row("RMS  전 → 후", ni.rmsBefore.toFixed(4)+"  →  "+ni.rmsAfter.toFixed(4), "good");
+  }
+
   if(d.frames!==null){
     var vrCls = d.voicedFrames===0 ? "bad" : (d.voicedFrames/d.frames<0.15?"warnc":"good");
     html += "<h3 style='margin-top:12px;'>② 피치 검출 (분석이 음을 잡았나)</h3>";
@@ -632,6 +646,10 @@ function renderDebug(){
     html += row("유성음 프레임(음 검출됨)", d.voicedFrames+" ("+(d.frames?(d.voicedFrames/d.frames*100).toFixed(0):0)+"%)", vrCls);
     html += row("무성/미검출 프레임", d.unvoicedFrames);
     html += "<h3 style='margin-top:12px;'>③ 어느 게이트에서 걸렸나 (미검출 프레임 원인)</h3>";
+    if(lastGateStats && lastGateStats.gateUsed!=null){
+      html += row("적용된 볼륨 게이트값", lastGateStats.gateUsed.toFixed(4)
+        +" (상대 "+lastGateStats.relGate.toFixed(4)+" vs 절대 "+LEVEL_GATE.toFixed(4)+")");
+    }
     html += row("볼륨 게이트 컷 (너무 작음)", d.gatedByLevel, d.gatedByLevel>0&&d.voicedFrames===0?"warnc":"");
     html += row("clarity 컷 (prob≤0.5)", d.gatedByProb, d.gatedByProb>0&&d.voicedFrames===0?"warnc":"");
     html += row("주파수 범위 밖 (60~1200Hz 벗어남)", d.gatedByRange);
@@ -705,10 +723,52 @@ var FRAME_MS = 25;      // 프레임 간격
 var WIN_SIZE = 2048;    // YIN 윈도우 (spike와 동일)
 
 // ── 피치 검출 게이트 (목소리 통과 위해 사인파 기준보다 완화) ──
-var LEVEL_GATE = 0.003;   // 볼륨 최소치 (기존 0.008 → 폰 작은 마이크 대비 완화)
+var LEVEL_GATE = 0.003;   // 볼륨 절대 최소치 (정규화 후에도 남기는 하한)
 var YIN_THRESH = 0.20;    // YIN threshold (기존 0.15 → 하모닉 많은 목소리 대비 완화)
 var PROB_CUT   = 0.35;    // clarity 최소치 (기존 0.5 → 목소리 clarity 낮음)
 var HZ_MIN = 60, HZ_MAX = 1200;
+// 사람 목소리 "핵심" 대역 — 이 밖(특히 저주파 옥타브 오류)은 후보에서 약화
+var VOICE_HZ_LOW = 70, VOICE_HZ_HIGH = 1000;
+
+// ── 볼륨 정규화 파라미터 ──
+var NORM_TARGET_PEAK = 0.9;  // 정규화 목표 peak
+var NORM_MAX_GAIN    = 30;   // 게인 상한(노이즈 폭주 방지). 최대 30배까지만 키움
+// 상대 게이트: 정규화 후 peak(=NORM_TARGET_PEAK) 대비 5%. 절대 하한과 함께 max로 적용.
+var REL_GATE_FRAC    = 0.05;
+
+// 정규화 디버그 값 저장(정규화 전/후 표시용)
+var lastNormInfo = null;
+
+// 녹음 전체를 peak 기준으로 스케일업. "크기"만 바꾸고 "주파수(음정)"는 안 건드림.
+// 반환: 정규화된 새 Float32Array (원본 lastRecordedSamples는 재생용으로 보존).
+function normalizeSamples(samples){
+  var peak=0, sumSq=0, n=samples.length;
+  for(var i=0;i<n;i++){
+    var v=samples[i]; var a=v<0?-v:v;
+    if(a>peak) peak=a; sumSq+=v*v;
+  }
+  var rmsBefore = n? Math.sqrt(sumSq/n) : 0;
+  var gain = 1;
+  if(peak > 1e-6){
+    gain = NORM_TARGET_PEAK / peak;
+    if(gain > NORM_MAX_GAIN) gain = NORM_MAX_GAIN; // 노이즈까지 폭주 방지
+    if(gain < 1) gain = 1; // 이미 충분히 크면 줄이지 않음(클리핑 방지 목적 아님)
+  }
+  var out = new Float32Array(n);
+  var peakAfter=0, sumSqAfter=0;
+  for(var i=0;i<n;i++){
+    var v = samples[i]*gain;
+    if(v>1) v=1; else if(v<-1) v=-1; // 안전 클램프
+    out[i]=v;
+    var a=v<0?-v:v; if(a>peakAfter) peakAfter=a; sumSqAfter+=v*v;
+  }
+  lastNormInfo = {
+    gain:gain,
+    peakBefore:peak, peakAfter:peakAfter,
+    rmsBefore:rmsBefore, rmsAfter: n? Math.sqrt(sumSqAfter/n):0
+  };
+  return out;
+}
 
 // 게이트 통계(디버그용) — 마지막 extract 호출 결과 저장
 var lastGateStats=null;
@@ -718,23 +778,42 @@ function extractPitchTrack(samples, sr){
   var frames=[]; // {t, freq, prob, cent, level}
   var win = new Float32Array(WIN_SIZE);
   var gLevel=0, gProb=0, gRange=0; // 게이트별 컷 카운트
+
+  // 프레임 RMS를 먼저 다 구해서, 프레임 최대 대비 상대 게이트를 만든다.
+  var frameRms=[];
   var maxRms=0, sumRms=0;
   for(var start=0; start+WIN_SIZE<=samples.length; start+=hop){
-    for(var i=0;i<WIN_SIZE;i++) win[i]=samples[start+i];
-    var lvl = rms(win);
+    var s2=0;
+    for(var i=0;i<WIN_SIZE;i++){ var v=samples[start+i]; s2+=v*v; }
+    var lvl=Math.sqrt(s2/WIN_SIZE);
+    frameRms.push(lvl);
     if(lvl>maxRms) maxRms=lvl; sumRms+=lvl;
+  }
+  // 게이트 = max(절대 하한, 프레임최대 * 상대비율). 정규화 후엔 상대 게이트가 지배적.
+  var relGate = maxRms * REL_GATE_FRAC;
+  var gate = Math.max(LEVEL_GATE, relGate);
+
+  var fi=0;
+  for(var start=0; start+WIN_SIZE<=samples.length; start+=hop, fi++){
+    for(var i=0;i<WIN_SIZE;i++) win[i]=samples[start+i];
+    var lvl = frameRms[fi];
     var t = (start+WIN_SIZE/2)/sr;
     var entry = { t:t, freq:-1, prob:0, cent:null, level:lvl };
-    if(lvl > LEVEL_GATE){
+    if(lvl > gate){
       var r = yinDetect(win, sr, YIN_THRESH);
       if(r.freq < 0){
         gProb++; // YIN이 아예 tau 못 찾음 = clarity 실패로 분류
       } else if(r.freq<=HZ_MIN || r.freq>=HZ_MAX){
-        gRange++;
+        gRange++; // 절대 사용 불가 대역(60Hz↓ / 1200Hz↑)만 완전 컷
       } else if(r.prob<=PROB_CUT){
         gProb++;
       } else {
-        entry.freq=r.freq; entry.prob=r.prob; entry.cent=freqToAbsCent(r.freq);
+        // 옥타브 오류 1차 방어: 목소리 핵심대역(70~1000Hz) 밖의 저주파는
+        //   1옥타브 위로 접어 대역 안으로 끌어올린다(YIN이 반주파수로 빠지는 흔한 오류).
+        var freq = r.freq;
+        var guard=0;
+        while(freq < VOICE_HZ_LOW && freq*2 < HZ_MAX && guard<3){ freq*=2; guard++; }
+        entry.freq=freq; entry.prob=r.prob; entry.cent=freqToAbsCent(freq);
       }
     } else {
       gLevel++;
@@ -743,25 +822,53 @@ function extractPitchTrack(samples, sr){
   }
   lastGateStats = {
     gatedByLevel:gLevel, gatedByProb:gProb, gatedByRange:gRange,
-    frameMaxRms:maxRms, frameAvgRms: frames.length?sumRms/frames.length:0
+    frameMaxRms:maxRms, frameAvgRms: frames.length?sumRms/frames.length:0,
+    gateUsed:gate, relGate:relGate
   };
   return frames;
 }
 
-// 옥타브 튐(잘못된 검출) 완화: 이웃 중앙값 대비 ±1옥타브 벗어난 튐을 보정
+// 옥타브 튐(잘못된 검출) 완화 — 3단계:
+//   (A) 전체 중앙값 기준 ±1옥타브 접기 (전역 정렬)
+//   (B) 지역(슬라이딩) 중앙값 기준 접기 — 곡의 음역이 넓어도 지역 톤 따라 보정
+//   (C) 단발 점프 제거 — 양옆 프레임과만 크게 벌어진 1개짜리 튐은 이웃값으로 흡수
 function medianFilterOctave(frames){
   var voiced = frames.filter(function(f){ return f.cent!==null; });
   if(voiced.length<5) return;
-  // 전체 중앙 cent
-  var cents = voiced.map(function(f){return f.cent;}).sort(function(a,b){return a-b;});
-  var med = cents[Math.floor(cents.length/2)];
-  frames.forEach(function(f){
-    if(f.cent===null) return;
-    // 중앙값에서 ±700cent 이상 떨어졌고, 옥타브 이동(±1200±100)이면 옥타브 오류로 간주해 접기
-    var d = f.cent - med;
+
+  // (A) 전역 중앙값 기준 옥타브 접기
+  var globalMed = median(voiced.map(function(f){return f.cent;}));
+  voiced.forEach(function(f){
+    var d = f.cent - globalMed;
     while(d > 900){ f.cent -= 1200; f.freq/=2; d-=1200; }
     while(d < -900){ f.cent += 1200; f.freq*=2; d+=1200; }
   });
+
+  // (B) 지역 중앙값(±5 프레임) 기준 옥타브 접기
+  var W=5;
+  for(var i=0;i<voiced.length;i++){
+    var lo=Math.max(0,i-W), hi=Math.min(voiced.length-1,i+W);
+    var win=[];
+    for(var j=lo;j<=hi;j++) if(j!==i) win.push(voiced[j].cent);
+    if(win.length<2) continue;
+    var lmed=median(win);
+    var d = voiced[i].cent - lmed;
+    while(d > 900){ voiced[i].cent -= 1200; voiced[i].freq/=2; d-=1200; }
+    while(d < -900){ voiced[i].cent += 1200; voiced[i].freq*=2; d+=1200; }
+  }
+
+  // (C) 단발 점프 스무딩: 양옆과 모두 500cent 이상 벌어진 고립 프레임은
+  //     이웃 두 값의 평균으로 보정(옥타브 접기로도 안 잡힌 튐 마무리).
+  for(var i=1;i<voiced.length-1;i++){
+    var prev=voiced[i-1].cent, cur=voiced[i].cent, next=voiced[i+1].cent;
+    var neighborClose = Math.abs(prev-next) < 300; // 앞뒤는 서로 가까운데
+    var jumpsUp = Math.abs(cur-prev) > 500 && Math.abs(cur-next) > 500; // 나만 튐
+    if(neighborClose && jumpsUp){
+      var fixed=(prev+next)/2;
+      voiced[i].cent=fixed;
+      voiced[i].freq=440*Math.pow(2,(fixed-6900)/1200);
+    }
+  }
 }
 
 function median(arr){
@@ -787,7 +894,10 @@ analyzeBtn.addEventListener("click", function(){
   if(!lastRecordedSamples || lastRecordedSamples.length < recSampleRate*0.4){
     recStatus.textContent="분석할 녹음이 없어요. 다시 녹음하세요."; return;
   }
-  var frames = extractPitchTrack(lastRecordedSamples, recSampleRate);
+  // ★ 핵심: 분석 전 볼륨 정규화. 작게 녹음돼도 게이트를 통과하도록 통째로 키움.
+  //   음정(주파수)은 안 바뀌고 크기만 커짐 → 진단 정확도엔 안전.
+  var normSamples = normalizeSamples(lastRecordedSamples);
+  var frames = extractPitchTrack(normSamples, recSampleRate);
   medianFilterOctave(frames);
   var voiced = frames.filter(function(f){ return f.cent!==null; });
   var voicedRatio = voiced.length / Math.max(1,frames.length);
