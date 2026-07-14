@@ -52,6 +52,20 @@
     border-radius: 10px; border: 1px solid #202538; margin-top: 10px; }
 
   /* 결과 */
+  /* 피치검출 엔진 배지 (결과 나오면 항상 상단에 표시) */
+  .eng-badge { display:flex; flex-wrap:wrap; align-items:center; gap:6px;
+    justify-content:center; margin:2px 0 8px; padding:8px 10px;
+    border-radius:10px; font-size:13px; font-weight:700; line-height:1.4; }
+  .eng-badge.ok  { background:#0f2c1c; border:1px solid #1f5a38; color:#6ff0a6; }
+  .eng-badge.warn{ background:#2c1c0f; border:1px solid #5a3a1f; color:#ffcf7a; }
+  .eng-badge .chip { background:rgba(255,255,255,.08); border-radius:6px;
+    padding:2px 8px; font-size:12px; color:#e8ecf5; font-weight:600; }
+  .eng-badge .why { flex-basis:100%; text-align:center; font-size:12px;
+    font-weight:500; color:#ffbfa0; word-break:break-word; }
+  .eng-retry { flex-basis:100%; text-align:center; margin-top:2px; }
+  .eng-retry button { background:#1a2036; border:1px solid #34406a; color:#cdd6ee;
+    font-size:12px; font-weight:700; border-radius:8px; padding:6px 12px; cursor:pointer; }
+  .eng-retry button:disabled { opacity:.5; cursor:default; }
   .score-wrap { text-align: center; margin: 6px 0 4px; }
   .score-num { font-size: 64px; font-weight: 800; line-height: 1; letter-spacing: -2px; }
   .score-lbl { font-size: 12px; color: #8a91a3; margin-top: 2px; }
@@ -158,6 +172,9 @@
 <!-- ===== 결과 ===== -->
 <div class="card hidden" id="resultCard">
   <h2 id="resultTitle">진단 결과</h2>
+
+  <!-- 피치검출 엔진 상태 배지 (결과 나오면 항상 표시 · 디버그 패널 안 열어도 보임) -->
+  <div class="eng-badge warn" id="engBadge" style="display:none;"></div>
 
   <div class="score-wrap" id="scoreWrap">
     <div class="score-num" id="scoreNum">–</div>
@@ -1151,6 +1168,7 @@ analyzeBtn.addEventListener("click", async function(){
 function showLowData(ratio){
   var rc=document.getElementById("resultCard");
   rc.classList.remove("hidden");
+  renderEngineBadge();
   document.getElementById("scoreNum").textContent="?";
   document.getElementById("scoreNum").style.color="#7a8296";
   document.getElementById("scoreLbl").textContent="분석 불가";
@@ -1262,10 +1280,107 @@ function longestFlatStd(voiced){
 }
 
 /* ==================================================================
+   피치검출 엔진 상태 배지 (결과 나오면 항상 상단에 표시)
+   - 실제 사용된 엔진(CREPE/YIN), tf 백엔드, CREPE 실패 이유를 노출.
+   - 진단/분석 로직은 안 건드리고 crepeState·lastEngineUsed 값만 읽어서 표시.
+   ================================================================== */
+function renderEngineBadge(){
+  var el = document.getElementById("engBadge");
+  if(!el) return;
+  var eng = lastEngineUsed || "?";
+  var isCrepe = (eng === "CREPE");
+  el.style.display = "flex";
+  el.className = "eng-badge " + (isCrepe ? "ok" : "warn");
+
+  var html = "";
+  if(isCrepe){
+    html += "<span>엔진: CREPE ✅</span>";
+    html += "<span class='chip'>백엔드: " + (crepeState.backend || "?") + "</span>";
+    if(crepeState.loadMs!=null)
+      html += "<span class='chip'>로딩 " + (crepeState.loadMs/1000).toFixed(1) + "s</span>";
+  } else {
+    html += "<span>엔진: YIN ⚠️ (CREPE 미사용)</span>";
+    // CREPE가 왜 안 돌았는지 원인 노출
+    var why = crepeReasonText();
+    html += "<div class='why'>" + why + "</div>";
+    // 강제 재시도(cpu 백엔드) 버튼 — iOS webgl 문제일 때 cpu로 되는지 확인용
+    html += "<div class='eng-retry'><button id='crepeRetryBtn' type='button'>"
+          + "🔄 CREPE 강제 재시도 (cpu 백엔드)</button></div>";
+  }
+  el.innerHTML = html;
+
+  var btn = document.getElementById("crepeRetryBtn");
+  if(btn) btn.addEventListener("click", retryCrepeCpu);
+}
+
+// CREPE가 YIN으로 폴백된 원인을 사람이 읽을 수 있게 구성
+function crepeReasonText(){
+  if(typeof tf === "undefined")
+    return "원인: TensorFlow.js(tf) 자체가 로드 안 됨 — CDN 차단/네트워크 문제로 의심.";
+  if(crepeState.status === "failed"){
+    var e = crepeState.err ? String(crepeState.err) : "알 수 없음";
+    return "원인(로딩 실패): " + e + "  — 백엔드 초기화 실패 / 모델 fetch 실패(CORS·네트워크) / iOS WebGL 문제 중 하나로 의심.";
+  }
+  if(crepeState.status === "loading")
+    return "원인: CREPE 로딩이 아직 안 끝남(로딩 중)에 폴백됨.";
+  if(crepeState.status === "ready")
+    return "원인: CREPE 모델은 준비됐으나 추론 중 예외 발생 → YIN 폴백. err=" + (crepeState.err || "없음");
+  return "원인 미확인 (crepeState.status=" + crepeState.status + ").";
+}
+
+// CREPE 강제 재시도: cpu 백엔드로 다시 로딩 시도 (webgl 문제 격리용)
+async function retryCrepeCpu(){
+  var btn = document.getElementById("crepeRetryBtn");
+  var el = document.getElementById("engBadge");
+  if(typeof tf === "undefined"){
+    if(el){ el.className="eng-badge warn";
+      el.innerHTML = "<span>엔진: YIN ⚠️</span><div class='why'>tf 자체가 없어 재시도 불가 — TensorFlow.js CDN 로드부터 실패.</div>"; }
+    return;
+  }
+  if(btn){ btn.disabled = true; btn.textContent = "cpu 백엔드로 재시도 중…"; }
+  try{
+    // 상태 리셋 후 cpu 강제
+    crepeState.status = ""; crepeState.model = null; crepeState.err = null;
+    try{ await tf.setBackend("cpu"); await tf.ready(); }catch(e){ crepeState.err = "cpu 백엔드 초기화 실패: " + (e && e.message || e); }
+    crepeState.backend = tf.getBackend();
+    if(!crepeState.err){
+      var t0 = performance.now();
+      crepeState.model = await tf.loadLayersModel(CREPE_MODEL_URL);
+      var warm = tf.zeros([1, CREPE_FRAME]);
+      var wout = crepeState.model.predict(warm);
+      (Array.isArray(wout)?wout:[wout]).forEach(function(t){ t.dispose && t.dispose(); });
+      warm.dispose && warm.dispose();
+      crepeState.loadMs = Math.round(performance.now()-t0);
+      crepeState.status = "ready";
+    } else {
+      crepeState.status = "failed";
+    }
+  }catch(e){
+    crepeState.status = "failed";
+    crepeState.err = (e && e.message) ? e.message : String(e);
+  }
+  // 결과 반영
+  if(el){
+    if(crepeState.status === "ready"){
+      el.className = "eng-badge ok";
+      el.innerHTML = "<span>CREPE 재로딩 성공 ✅ (cpu)</span>"
+        + "<span class='chip'>백엔드: " + (crepeState.backend||"?") + "</span>"
+        + "<span class='chip'>로딩 " + (crepeState.loadMs/1000).toFixed(1) + "s</span>"
+        + "<div class='why'>이제 다시 📊 분석하기를 누르면 CREPE로 분석됩니다.</div>";
+    } else {
+      el.className = "eng-badge warn";
+      el.innerHTML = "<span>엔진: YIN ⚠️ (cpu 재시도도 실패)</span>"
+        + "<div class='why'>원인: " + (crepeState.err||"알 수 없음") + "</div>";
+    }
+  }
+}
+
+/* ==================================================================
    결과 렌더
    ================================================================== */
 function renderResult(R){
   var rc=document.getElementById("resultCard");
+  renderEngineBadge();
   rc.classList.remove("hidden");
   document.getElementById("segBlock").classList.toggle("hidden", R.mode!=="follow");
 
