@@ -90,6 +90,28 @@
   .checklist { font-size: 13px; line-height: 1.75; color: #c2c8d6; }
   code { background:#1a1e2b; padding:1px 5px; border-radius:4px; font-size:12px; }
   .hidden { display: none !important; }
+
+  /* 재생 버튼 */
+  .btn-play { background:#1f7a4d; color:#fff; margin-top:8px; }
+  .btn-play:active { background:#175d3a; }
+
+  /* 디버그 패널 */
+  .dbg-toggle { background:#241a2e; color:#d6b3ff; border:1px solid #3a2a4a; margin-top:8px; }
+  .dbg-toggle:active { background:#2e2138; }
+  .dbg-panel { background:#0a0c12; border:1px solid #2a2340; border-radius:12px;
+    padding:12px; margin-top:10px; font-family:ui-monospace,Menlo,Consolas,monospace; }
+  .dbg-panel h3 { font-size:12px; color:#c79bff; margin:0 0 8px; letter-spacing:0.3px; }
+  .dbg-row { display:flex; justify-content:space-between; gap:10px; font-size:12px;
+    padding:4px 0; border-bottom:1px solid #14121c; line-height:1.4; }
+  .dbg-row:last-child { border-bottom:0; }
+  .dbg-k { color:#8a8296; flex:0 0 auto; }
+  .dbg-v { color:#e8ecf4; text-align:right; word-break:break-word; }
+  .dbg-v.good { color:#3cdc82; }
+  .dbg-v.bad { color:#ff5a6e; }
+  .dbg-v.warnc { color:#f5c542; }
+  .dbg-verdict { font-size:12.5px; line-height:1.6; color:#cdd3e0; margin-top:10px;
+    padding:10px; background:#12101a; border-radius:8px; border:1px solid #2a2340; }
+  .dbg-verdict b { color:#fff; }
 </style>
 </head>
 <body>
@@ -124,7 +146,10 @@
   <div class="rec-time idle" id="recTime">0.0s</div>
   <canvas class="live-wave" id="liveWave" width="600" height="120"></canvas>
   <button class="btn-rec" id="recBtn" style="margin-top:12px;">🎤 녹음 시작</button>
+  <button class="btn-play hidden" id="playRecBtn" style="margin-top:8px;">▶️ 내 녹음 들어보기</button>
   <button class="btn-main hidden" id="analyzeBtn" style="margin-top:8px;">📊 분석하기</button>
+  <button class="btn-sec dbg-toggle hidden" id="dbgToggle" style="margin-top:8px;">🐞 디버그 정보 보기</button>
+  <div class="dbg-panel hidden" id="dbgPanel"></div>
   <p class="sub" id="micHint" style="margin-top:10px;">※ 첫 녹음 시 마이크 권한 허용 필요. HTTPS(GitHub Pages) 또는 localhost에서만 동작.</p>
 </div>
 
@@ -373,6 +398,9 @@ var lastRecordedSamples=null; // 분석용 Float32Array
 
 var recBtn=document.getElementById("recBtn");
 var analyzeBtn=document.getElementById("analyzeBtn");
+var playRecBtn=document.getElementById("playRecBtn");
+var dbgToggle=document.getElementById("dbgToggle");
+var dbgPanel=document.getElementById("dbgPanel");
 var recStatus=document.getElementById("recStatus");
 var recTime=document.getElementById("recTime");
 var liveWave=document.getElementById("liveWave");
@@ -428,6 +456,10 @@ function startRecording(){
   recStatus.textContent = mode==="follow" ? "🎤 목표 멜로디를 따라 부르세요!" : "🎤 소절을 부르세요!";
   recTime.classList.remove("idle");
   analyzeBtn.classList.add("hidden");
+  // 이전 재생/디버그 초기화
+  if(playSourceNode){ try{ playSourceNode.stop(); }catch(e){} playSourceNode=null; }
+  playRecBtn.textContent="▶️ 내 녹음 들어보기";
+  playRecBtn.classList.add("hidden");
   document.getElementById("resultCard").classList.add("hidden");
   drawLiveLoop();
 }
@@ -447,13 +479,197 @@ function stopRecording(){
   recBtn.classList.remove("btn-main"); recBtn.classList.add("btn-rec");
   recTime.classList.add("idle");
   var secs = total/recSampleRate;
+
+  // ── 디버그: 녹음 자체가 됐는지 즉시 계산 (분석 전에 판별) ──
+  computeRecDebug(merged, recSampleRate, secs);
+
+  // 재생 버튼: 녹음이 있으면 무조건 노출 (짧아도 들어볼 수 있게)
+  if(total>0){
+    playRecBtn.classList.remove("hidden");
+    dbgToggle.classList.remove("hidden");
+  }
+
   if(secs < 0.4){
     recStatus.textContent="⚠️ 너무 짧아요 ("+secs.toFixed(1)+"s). 다시 녹음하세요.";
     analyzeBtn.classList.add("hidden");
   } else {
-    recStatus.textContent="녹음 완료 · "+secs.toFixed(1)+"초. 아래 분석하기를 누르세요.";
+    recStatus.textContent="녹음 완료 · "+secs.toFixed(1)+"초. ▶️로 소리 확인 → 📊 분석하기.";
     analyzeBtn.classList.remove("hidden");
   }
+}
+
+/* ==================================================================
+   녹음 재생 (raw Float32 -> AudioBuffer)
+   ================================================================== */
+var playSourceNode=null;
+playRecBtn.addEventListener("click", function(){
+  if(!lastRecordedSamples || !lastRecordedSamples.length){
+    recStatus.textContent="재생할 녹음이 없어요."; return;
+  }
+  try{
+    // 재생용 컨텍스트: 녹음 audioCtx 재사용(닫히지 않았으면)
+    var ctx = audioCtx && audioCtx.state!=="closed"
+      ? audioCtx
+      : new (window.AudioContext||window.webkitAudioContext)();
+    if(ctx.state==="suspended") ctx.resume();
+
+    // 이미 재생 중이면 멈추기 토글
+    if(playSourceNode){
+      try{ playSourceNode.stop(); }catch(e){}
+      playSourceNode=null;
+      playRecBtn.textContent="▶️ 내 녹음 들어보기";
+      return;
+    }
+    var buf = ctx.createBuffer(1, lastRecordedSamples.length, recSampleRate);
+    buf.getChannelData(0).set(lastRecordedSamples);
+    var src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.onended = function(){
+      playSourceNode=null;
+      playRecBtn.textContent="▶️ 내 녹음 들어보기";
+    };
+    src.start();
+    playSourceNode = src;
+    playRecBtn.textContent="⏹ 재생 멈추기 (들리면 마이크 OK)";
+  }catch(e){
+    recStatus.textContent="재생 실패: "+e.message;
+  }
+});
+
+/* ==================================================================
+   디버그 정보 수집 + 렌더
+   ================================================================== */
+var lastDebug=null;
+dbgToggle.addEventListener("click", function(){
+  var hidden = dbgPanel.classList.toggle("hidden");
+  dbgToggle.textContent = hidden ? "🐞 디버그 정보 보기" : "🐞 디버그 정보 닫기";
+});
+
+function computeRecDebug(samples, sr, secs){
+  // 입력 레벨: 전체 RMS + 피크
+  var peak=0, sumSq=0, n=samples.length;
+  for(var i=0;i<n;i++){
+    var v=samples[i]; var a=v<0?-v:v;
+    if(a>peak) peak=a;
+    sumSq+=v*v;
+  }
+  var globalRms = n? Math.sqrt(sumSq/n) : 0;
+  // 무음이 아닌(레벨 있는) 구간 비율 — 앞뒤 침묵 빼고 실제 소리 있는 비율
+  var loud=0;
+  for(var i=0;i<n;i++){ var a=samples[i]; if(a<0)a=-a; if(a>0.01) loud++; }
+  var loudRatio = n? loud/n : 0;
+
+  lastDebug = {
+    secs:secs, sr:sr, samples:n,
+    peak:peak, globalRms:globalRms, loudRatio:loudRatio,
+    // 분석 단계 값은 분석 시 채움
+    frames:null, voicedFrames:null, unvoicedFrames:null,
+    gatedByLevel:null, gatedByProb:null, gatedByRange:null,
+    minHz:null, maxHz:null, notes:null,
+    frameMaxRms:null, frameAvgRms:null
+  };
+  renderDebug();
+}
+
+function noteFromCentDbg(cent){ // absCent -> "C4" 근사
+  var midi=Math.round(69+(cent-6900)/100);
+  return midiName(midi);
+}
+
+// 분석 후 ②③④ 단계 값 채우기
+function fillAnalysisDebug(frames, voiced){
+  if(!lastDebug) return;
+  var d=lastDebug;
+  d.frames = frames.length;
+  d.voicedFrames = voiced.length;
+  d.unvoicedFrames = frames.length - voiced.length;
+  var gs = lastGateStats || {};
+  d.gatedByLevel = gs.gatedByLevel||0;
+  d.gatedByProb = gs.gatedByProb||0;
+  d.gatedByRange = gs.gatedByRange||0;
+  d.frameMaxRms = gs.frameMaxRms||0;
+  d.frameAvgRms = gs.frameAvgRms||0;
+  if(voiced.length){
+    var freqs = voiced.map(function(f){return f.freq;});
+    var cents = voiced.map(function(f){return f.cent;});
+    d.minHz = Math.min.apply(null,freqs);
+    d.maxHz = Math.max.apply(null,freqs);
+    d.minCent = Math.min.apply(null,cents);
+    d.maxCent = Math.max.apply(null,cents);
+    // 검출된 음 목록 (중복 제거, 출현순)
+    var seen={}, list=[];
+    voiced.forEach(function(f){
+      var nm = noteFromCentDbg(f.cent);
+      if(!seen[nm]){ seen[nm]=true; list.push(nm); }
+    });
+    d.notes = list.slice(0,16).join(", ") + (list.length>16?" …":"");
+  }
+  renderDebug();
+}
+
+function renderDebug(){
+  if(!lastDebug){ dbgPanel.innerHTML="아직 녹음 없음."; return; }
+  var d=lastDebug;
+  function row(k,v,cls){ return "<div class='dbg-row'><span class='dbg-k'>"+k+"</span><span class='dbg-v "+(cls||"")+"'>"+v+"</span></div>"; }
+
+  // 판정 클래스
+  var rmsCls = d.globalRms<0.003 ? "bad" : (d.globalRms<0.01 ? "warnc" : "good");
+  var peakCls = d.peak<0.02 ? "bad" : (d.peak<0.1 ? "warnc" : "good");
+
+  var html = "<h3>① 녹음 원본 (마이크가 소리를 받았나)</h3>";
+  html += row("녹음 길이", d.secs.toFixed(2)+" 초");
+  html += row("샘플레이트", d.sr+" Hz");
+  html += row("총 샘플 수", d.samples.toLocaleString());
+  html += row("최대 볼륨(peak)", d.peak.toFixed(4)+ (d.peak<0.02?"  ← 0에 가까움!":""), peakCls);
+  html += row("평균 볼륨(RMS)", d.globalRms.toFixed(4)+ (d.globalRms<0.003?"  ← 무음 의심!":""), rmsCls);
+  html += row("소리 있는 샘플 비율", (d.loudRatio*100).toFixed(1)+"%");
+
+  if(d.frames!==null){
+    var vrCls = d.voicedFrames===0 ? "bad" : (d.voicedFrames/d.frames<0.15?"warnc":"good");
+    html += "<h3 style='margin-top:12px;'>② 피치 검출 (분석이 음을 잡았나)</h3>";
+    html += row("전체 프레임", d.frames);
+    html += row("유성음 프레임(음 검출됨)", d.voicedFrames+" ("+(d.frames?(d.voicedFrames/d.frames*100).toFixed(0):0)+"%)", vrCls);
+    html += row("무성/미검출 프레임", d.unvoicedFrames);
+    html += "<h3 style='margin-top:12px;'>③ 어느 게이트에서 걸렸나 (미검출 프레임 원인)</h3>";
+    html += row("볼륨 게이트 컷 (너무 작음)", d.gatedByLevel, d.gatedByLevel>0&&d.voicedFrames===0?"warnc":"");
+    html += row("clarity 컷 (prob≤0.5)", d.gatedByProb, d.gatedByProb>0&&d.voicedFrames===0?"warnc":"");
+    html += row("주파수 범위 밖 (60~1200Hz 벗어남)", d.gatedByRange);
+    if(d.voicedFrames>0){
+      html += "<h3 style='margin-top:12px;'>④ 검출된 음</h3>";
+      html += row("주파수 범위", d.minHz.toFixed(0)+" ~ "+d.maxHz.toFixed(0)+" Hz");
+      html += row("음 범위(근사)", noteFromCentDbg(d.minCent)+" ~ "+noteFromCentDbg(d.maxCent));
+      html += row("검출된 음 목록", d.notes||"–");
+      html += row("프레임 RMS 최대/평균", d.frameMaxRms.toFixed(4)+" / "+d.frameAvgRms.toFixed(4));
+    }
+  } else {
+    html += "<div class='dbg-verdict'>아직 분석 전. 📊 분석하기를 누르면 ② 피치 검출 단계 값이 채워집니다.</div>";
+  }
+
+  // 종합 판정 (정직하게)
+  html += "<div class='dbg-verdict'>"+debugVerdict(d)+"</div>";
+  dbgPanel.innerHTML = html;
+}
+
+function debugVerdict(d){
+  if(d.peak<0.02 || d.globalRms<0.003){
+    return "<b>판정: 마이크가 소리를 거의 못 받음.</b> peak/RMS가 0에 가깝습니다. "
+      +"▶️로 재생해서 <b>아무 소리도 안 들리면 확정</b> — 원인은 마이크 권한/다른 앱 점유/자동게인 문제입니다. "
+      +"조용해도 완전 무음이면 하드웨어/권한 쪽입니다.";
+  }
+  if(d.frames===null){
+    return "녹음 신호는 들어왔습니다(peak "+d.peak.toFixed(3)+"). ▶️로 목소리가 또렷이 들리는지 먼저 확인하고, 📊 분석하기로 ②단계를 채우세요.";
+  }
+  if(d.voicedFrames===0){
+    var cause = d.gatedByLevel > d.gatedByProb
+      ? "대부분 <b>볼륨 게이트</b>에서 컷 — 녹음이 작습니다(마이크 멀거나 자동게인 축소)."
+      : "대부분 <b>clarity(prob) 컷</b>에서 걸림 — 소리는 있는데 YIN이 목소리를 노이즈로 판단.";
+    return "<b>판정: 소리는 녹음됐지만 피치 검출이 0.</b> "+cause+" ▶️로 목소리가 들린다면, 분석 게이트가 목소리엔 너무 빡센 것입니다(완화 필요).";
+  }
+  if(d.voicedFrames/d.frames < 0.15){
+    return "일부만 검출됨("+d.voicedFrames+"/"+d.frames+"). 신호는 있으나 게이트가 많이 걸러냈습니다. 검출된 음("+(d.notes||"")+")이 실제 부른 음과 맞는지 확인.";
+  }
+  return "<b>정상 범위.</b> 유성음 "+(d.voicedFrames/d.frames*100).toFixed(0)+"% 검출. 곡선이 실제 부른 것과 맞는지는 결과 그래프로 판단하세요.";
 }
 
 function drawLiveLoop(){
@@ -488,23 +704,47 @@ function drawLiveLoop(){
 var FRAME_MS = 25;      // 프레임 간격
 var WIN_SIZE = 2048;    // YIN 윈도우 (spike와 동일)
 
+// ── 피치 검출 게이트 (목소리 통과 위해 사인파 기준보다 완화) ──
+var LEVEL_GATE = 0.003;   // 볼륨 최소치 (기존 0.008 → 폰 작은 마이크 대비 완화)
+var YIN_THRESH = 0.20;    // YIN threshold (기존 0.15 → 하모닉 많은 목소리 대비 완화)
+var PROB_CUT   = 0.35;    // clarity 최소치 (기존 0.5 → 목소리 clarity 낮음)
+var HZ_MIN = 60, HZ_MAX = 1200;
+
+// 게이트 통계(디버그용) — 마지막 extract 호출 결과 저장
+var lastGateStats=null;
+
 function extractPitchTrack(samples, sr){
   var hop = Math.floor(sr * FRAME_MS/1000);
   var frames=[]; // {t, freq, prob, cent, level}
   var win = new Float32Array(WIN_SIZE);
+  var gLevel=0, gProb=0, gRange=0; // 게이트별 컷 카운트
+  var maxRms=0, sumRms=0;
   for(var start=0; start+WIN_SIZE<=samples.length; start+=hop){
     for(var i=0;i<WIN_SIZE;i++) win[i]=samples[start+i];
     var lvl = rms(win);
+    if(lvl>maxRms) maxRms=lvl; sumRms+=lvl;
     var t = (start+WIN_SIZE/2)/sr;
     var entry = { t:t, freq:-1, prob:0, cent:null, level:lvl };
-    if(lvl > 0.008){
-      var r = yinDetect(win, sr, 0.15);
-      if(r.freq>60 && r.freq<1200 && r.prob>0.5){
+    if(lvl > LEVEL_GATE){
+      var r = yinDetect(win, sr, YIN_THRESH);
+      if(r.freq < 0){
+        gProb++; // YIN이 아예 tau 못 찾음 = clarity 실패로 분류
+      } else if(r.freq<=HZ_MIN || r.freq>=HZ_MAX){
+        gRange++;
+      } else if(r.prob<=PROB_CUT){
+        gProb++;
+      } else {
         entry.freq=r.freq; entry.prob=r.prob; entry.cent=freqToAbsCent(r.freq);
       }
+    } else {
+      gLevel++;
     }
     frames.push(entry);
   }
+  lastGateStats = {
+    gatedByLevel:gLevel, gatedByProb:gProb, gatedByRange:gRange,
+    frameMaxRms:maxRms, frameAvgRms: frames.length?sumRms/frames.length:0
+  };
   return frames;
 }
 
@@ -551,6 +791,8 @@ analyzeBtn.addEventListener("click", function(){
   medianFilterOctave(frames);
   var voiced = frames.filter(function(f){ return f.cent!==null; });
   var voicedRatio = voiced.length / Math.max(1,frames.length);
+
+  fillAnalysisDebug(frames, voiced);
 
   if(voiced.length < 4){
     showLowData(voicedRatio);
