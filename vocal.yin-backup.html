@@ -4,8 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>음정거울 · 녹음 보컬 진단</title>
-<!-- CREPE(딥러닝 피치검출) 구동용 TensorFlow.js. 실패해도 아래 YIN으로 폴백됨. -->
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; padding: 0; background: #0c0e14; color: #e8ecf4;
@@ -203,7 +201,7 @@
   <h2>⚠️ 이 방식의 정직한 한계</h2>
   <p class="warn">
   • <b>반주 있으면 안 됨(단선율만).</b> MR/피아노 깔고 부르면 분석 망가짐 — 목소리만.<br>
-  • <b>저음 옥타브 튐(개선됨).</b> CREPE로 바꾼 뒤 옥타브 오류가 크게 줄지만, 극저음/속삭임에선 여전히 튈 수 있음 → 곡선에 튄 점으로 보임.<br>
+  • <b>저음 옥타브 튐.</b> 남성 저음(~80Hz)은 한 옥타브 위/아래로 잘못 잡힐 수 있음 → 곡선에 튄 점으로 보임.<br>
   • <b>마이크·거리·소음 의존.</b> 폰마다 결과 다름. 조용한 곳에서, 마이크 20~30cm.<br>
   • <b>무성음/숨소리/자음</b> 구간은 음정이 없어 "분석 불가"로 비워둠 — 지어내지 않음.<br>
   • <b>에이전트(나)는 마이크 실측 불가</b> → 문법·로직만 검증. 진단이 맞는지는 <b>오너가 직접 불러서</b> 확인.
@@ -214,8 +212,7 @@
   <h2>🔧 어떻게 분석하나 (정직 보고)</h2>
   <p class="sub" style="margin:0;">
   • 녹음: Web Audio로 원시 샘플을 직접 모음(<code>ScriptProcessor</code>). 압축 없는 raw PCM.<br>
-  • 피치검출: <b>CREPE</b>(딥러닝 피치검출, NYU MARL) 모델을 TensorFlow.js로 브라우저에서 구동. 녹음을 16kHz로 리샘플 → 프레임별로 CREPE에 넣어 <b>시간축 음정 곡선 + 신뢰도(confidence)</b> 추출. CREPE는 목소리 하모닉에 속아 옥타브가 튀는 문제(YIN의 고질병)에 강함.<br>
-  • CREPE 모델(약 2MB)은 첫 분석 때 CDN에서 1회 다운로드. 실패하면 자동으로 <b>YIN 폴백</b>(완전히 안 죽음).<br>
+  • 분석: 녹음 전체를 <b>25ms 간격 프레임</b>으로 잘라 각 프레임에 <b>YIN 피치검출</b>(spike.html 검증 엔진 재사용) → 시간축 음정 곡선.<br>
   • 무성음/저신뢰 프레임은 버림(구멍). 남은 유효 프레임만으로 통계.<br>
   • 따라부르기: 목표 멜로디를 시간축에 정렬해 각 음 구간의 중앙값 cent 오차를 계산.<br>
   • 버릇 진단: <b>실제 검출값의 통계</b>(첫음 진입 오차, cent 표준편차=흔들림, 음 이동 시간, 전체 편향)로만 판단. 데이터 부족하면 "판단 불가"로 표기.
@@ -285,167 +282,6 @@ function yinDetect(buf, sampleRate, threshold){
   return { freq: sampleRate/betterTau, prob: probability };
 }
 function rms(b){ var s=0; for(var i=0;i<b.length;i++) s+=b[i]*b[i]; return Math.sqrt(s/b.length); }
-
-/* ==================================================================
-   CREPE (딥러닝 피치검출) — TensorFlow.js
-   출처: NYU MARL crepe (tiny), https://marl.github.io/crepe/model/model.json
-   - 입력: 16kHz, 1024샘플 프레임, per-frame 정규화((x-mean)/std)
-   - 출력: 360-bin salience. cent = argmax±4 가중평균, Hz=10*2^(cent/1200)
-   - confidence = activation.max()  (voiced 판정에 사용)
-   ================================================================== */
-var CREPE_MODEL_URL = "https://marl.github.io/crepe/model/model.json";
-var CREPE_SR = 16000;
-var CREPE_FRAME = 1024;
-// cent_mapping = linspace(0,7180,360) + 1997.3794084376191  (crepe.js와 동일)
-var CREPE_CENT_MAP = (function(){
-  var arr = new Float32Array(360);
-  var C1 = 1997.3794084376191;
-  for(var i=0;i<360;i++){ arr[i] = (7180*i/359) + C1; }
-  return arr;
-})();
-
-var crepeState = {
-  model: null,        // 로드된 tf 모델
-  status: "idle",     // idle | loading | ready | failed
-  err: null,
-  loadMs: null,       // 로드 소요(ms)
-  backend: null       // tfjs 백엔드(webgl/cpu)
-};
-
-// 모델 로드(1회). tfjs 없거나 로드 실패 시 status=failed 로 두고 false 반환.
-async function ensureCrepe(onProgress){
-  if(crepeState.status==="ready") return true;
-  if(crepeState.status==="failed") return false;
-  if(typeof tf==="undefined"){
-    crepeState.status="failed"; crepeState.err="TensorFlow.js 로드 실패(CDN 차단?)";
-    return false;
-  }
-  crepeState.status="loading";
-  try{
-    if(onProgress) onProgress("AI 피치검출 백엔드 준비 중…");
-    // iOS Safari에서 webgl readPixels 이슈가 있으면 cpu로 폴백.
-    try{ await tf.setBackend("webgl"); await tf.ready(); }
-    catch(e){ try{ await tf.setBackend("cpu"); await tf.ready(); }catch(e2){} }
-    crepeState.backend = tf.getBackend();
-    if(onProgress) onProgress("AI 모델 불러오는 중… (약 2MB, 첫 1회)");
-    var t0 = performance.now();
-    crepeState.model = await tf.loadLayersModel(CREPE_MODEL_URL);
-    // 웜업(첫 추론 지연 흡수): 더미 1프레임 한 번 돌림.
-    var warm = tf.zeros([1,1024]);
-    var wout = crepeState.model.predict(warm);
-    await wout.data(); tf.dispose([warm, wout]);
-    crepeState.loadMs = Math.round(performance.now()-t0);
-    crepeState.status="ready";
-    return true;
-  }catch(e){
-    crepeState.status="failed";
-    crepeState.err = (e && e.message) ? e.message : String(e);
-    return false;
-  }
-}
-
-// 16kHz 선형보간 리샘플. (음정/주파수는 시간축 비율 유지 → 정확)
-function resampleTo16k(samples, srcSr){
-  if(srcSr===CREPE_SR) return samples;
-  var ratio = CREPE_SR/srcSr;
-  var outLen = Math.floor(samples.length*ratio);
-  var out = new Float32Array(outLen);
-  for(var i=0;i<outLen;i++){
-    var srcPos = i/ratio;
-    var i0 = Math.floor(srcPos);
-    var i1 = Math.min(i0+1, samples.length-1);
-    var frac = srcPos - i0;
-    out[i] = samples[i0]*(1-frac) + samples[i1]*frac;
-  }
-  return out;
-}
-
-// 360-bin salience 한 프레임 → {cent, hz, conf}
-function crepeDecode(act){
-  // argmax
-  var mi=0, mv=act[0];
-  for(var i=1;i<360;i++){ if(act[i]>mv){ mv=act[i]; mi=i; } }
-  // ±4 이웃 가중평균(crepe.js와 동일)
-  var lo=Math.max(0, mi-4), hi=Math.min(359, mi+4);
-  var num=0, den=0;
-  for(var i=lo;i<=hi;i++){ num += CREPE_CENT_MAP[i]*act[i]; den += act[i]; }
-  var cent = den>0 ? num/den : CREPE_CENT_MAP[mi];
-  var hz = 10 * Math.pow(2, cent/1200);
-  return { cent:cent, hz:hz, conf:mv };
-}
-
-/* CREPE로 피치트랙 추출.
-   반환 형식은 YIN판 extractPitchTrack과 동일한 프레임 배열:
-     {t, freq, prob, cent(absCent), level}
-   → 뒤단(옥타브필터·진단·그래프)을 그대로 재사용.
-   cent는 여기서 절대 cent(freqToAbsCent와 같은 축)로 변환해 통일. */
-async function extractPitchTrackCrepe(samples, srcSr, hopMs){
-  var sig = resampleTo16k(samples, srcSr);
-  var hop16 = Math.max(1, Math.round(CREPE_SR * (hopMs/1000))); // 16k 기준 hop
-  // 프레임 시작 인덱스들
-  var starts=[];
-  for(var s=0; s+CREPE_FRAME<=sig.length; s+=hop16) starts.push(s);
-  if(starts.length===0) return [];
-
-  // 배치로 묶어 추론(메모리 안전 위해 청크 단위). 정규화는 프레임별.
-  var frames = new Array(starts.length);
-  var BATCH = 128; // 한 번에 128프레임씩
-  var gLevel=0, gProb=0, gRange=0;
-  var maxRms=0, sumRms=0;
-
-  for(var b=0; b<starts.length; b+=BATCH){
-    var cnt = Math.min(BATCH, starts.length-b);
-    // [cnt,1024] 입력 텐서 구성 + per-frame 정규화
-    var buf = new Float32Array(cnt*CREPE_FRAME);
-    var levels = new Float32Array(cnt);
-    for(var k=0;k<cnt;k++){
-      var st = starts[b+k];
-      // mean
-      var mean=0; for(var i=0;i<CREPE_FRAME;i++) mean+=sig[st+i]; mean/=CREPE_FRAME;
-      // std (crepe.js: norm(zeromean)/sqrt(1024))
-      var ss=0; for(var i=0;i<CREPE_FRAME;i++){ var z=sig[st+i]-mean; ss+=z*z; }
-      var std = Math.sqrt(ss)/Math.sqrt(CREPE_FRAME);
-      var lvl = Math.sqrt(ss/CREPE_FRAME); // 이 프레임 RMS(레벨)
-      levels[k]=lvl; if(lvl>maxRms) maxRms=lvl; sumRms+=lvl;
-      var inv = std>1e-9 ? 1/std : 0;
-      var base=k*CREPE_FRAME;
-      for(var i=0;i<CREPE_FRAME;i++) buf[base+i]=(sig[st+i]-mean)*inv;
-    }
-    var input = tf.tensor2d(buf, [cnt, CREPE_FRAME]);
-    var outT = crepeState.model.predict(input);
-    var out = await outT.data(); // Float32Array cnt*360
-    tf.dispose([input, outT]);
-
-    for(var k=0;k<cnt;k++){
-      var act = out.subarray(k*360, k*360+360);
-      var dec = crepeDecode(act);
-      var st = starts[b+k];
-      var t = (st + CREPE_FRAME/2)/CREPE_SR;
-      var lvl = levels[k];
-      var entry = { t:t, freq:-1, prob:dec.conf, cent:null, level:lvl };
-      if(dec.conf <= CREPE_CONF_CUT){
-        gProb++; // 신뢰도 낮음 = 무성/미검출
-      } else if(dec.hz<=HZ_MIN || dec.hz>=HZ_MAX){
-        gRange++; // 사용 대역 밖
-      } else {
-        entry.freq = dec.hz;
-        entry.cent = freqToAbsCent(dec.hz); // 절대 cent 축으로 통일
-      }
-      frames[b+k]=entry;
-    }
-  }
-
-  lastGateStats = {
-    gatedByLevel:gLevel, gatedByProb:gProb, gatedByRange:gRange,
-    frameMaxRms:maxRms, frameAvgRms: frames.length?sumRms/frames.length:0,
-    gateUsed:0, relGate:0, engine:"CREPE",
-    backend:crepeState.backend, loadMs:crepeState.loadMs
-  };
-  return frames;
-}
-
-// CREPE confidence 임계(voiced 판정). crepe.js 기본 0.5보다 살짝 낮춰 목소리 통과 여유.
-var CREPE_CONF_CUT = 0.30;
 
 /* ==================================================================
    목표 멜로디 정의  (한 음당 duration 초)
@@ -758,19 +594,13 @@ function fillAnalysisDebug(frames, voiced){
   d.gatedByRange = gs.gatedByRange||0;
   d.frameMaxRms = gs.frameMaxRms||0;
   d.frameAvgRms = gs.frameAvgRms||0;
-  d.engine = (lastGateStats && lastGateStats.engine) || lastEngineUsed || "?";
-  d.backend = lastGateStats && lastGateStats.backend;
-  d.loadMs = lastGateStats && lastGateStats.loadMs;
   if(voiced.length){
     var freqs = voiced.map(function(f){return f.freq;});
     var cents = voiced.map(function(f){return f.cent;});
-    var probs = voiced.map(function(f){return f.prob;});
     d.minHz = Math.min.apply(null,freqs);
     d.maxHz = Math.max.apply(null,freqs);
     d.minCent = Math.min.apply(null,cents);
     d.maxCent = Math.max.apply(null,cents);
-    d.confAvg = probs.reduce(function(a,b){return a+b;},0)/probs.length;
-    d.confMin = Math.min.apply(null,probs);
     // 검출된 음 목록 (중복 제거, 출현순)
     var seen={}, list=[];
     voiced.forEach(function(f){
@@ -812,44 +642,23 @@ function renderDebug(){
   if(d.frames!==null){
     var vrCls = d.voicedFrames===0 ? "bad" : (d.voicedFrames/d.frames<0.15?"warnc":"good");
     html += "<h3 style='margin-top:12px;'>② 피치 검출 (분석이 음을 잡았나)</h3>";
-    // 어떤 엔진으로 검출했나 (CREPE / YIN 폴백)
-    var engTxt = d.engine || "?";
-    var engCls = (d.engine==="CREPE") ? "good" : "warnc";
-    html += row("피치검출 엔진", engTxt, engCls);
-    if(d.engine==="CREPE"){
-      html += row("CREPE 백엔드", d.backend||"?");
-      if(d.loadMs!=null) html += row("모델 로딩 소요", (d.loadMs/1000).toFixed(1)+"초 (첫 1회)");
-    }
     html += row("전체 프레임", d.frames);
     html += row("유성음 프레임(음 검출됨)", d.voicedFrames+" ("+(d.frames?(d.voicedFrames/d.frames*100).toFixed(0):0)+"%)", vrCls);
     html += row("무성/미검출 프레임", d.unvoicedFrames);
     html += "<h3 style='margin-top:12px;'>③ 어느 게이트에서 걸렸나 (미검출 프레임 원인)</h3>";
-    if(d.engine==="CREPE"){
-      // CREPE 경로: 볼륨게이트 없이 confidence로만 컷. 라벨을 그에 맞춤.
-      html += row("신뢰도 컷 (conf≤"+CREPE_CONF_CUT.toFixed(2)+")", d.gatedByProb,
-        d.gatedByProb>0&&d.voicedFrames===0?"warnc":"");
-      html += row("주파수 범위 밖 (60~1200Hz)", d.gatedByRange);
-    } else {
-      if(lastGateStats && lastGateStats.gateUsed!=null){
-        html += row("적용된 볼륨 게이트값", lastGateStats.gateUsed.toFixed(4)
-          +" (상대 "+lastGateStats.relGate.toFixed(4)+" vs 절대 "+LEVEL_GATE.toFixed(4)+")");
-      }
-      html += row("볼륨 게이트 컷 (너무 작음)", d.gatedByLevel, d.gatedByLevel>0&&d.voicedFrames===0?"warnc":"");
-      html += row("clarity 컷 (prob≤0.5)", d.gatedByProb, d.gatedByProb>0&&d.voicedFrames===0?"warnc":"");
-      html += row("주파수 범위 밖 (60~1200Hz 벗어남)", d.gatedByRange);
+    if(lastGateStats && lastGateStats.gateUsed!=null){
+      html += row("적용된 볼륨 게이트값", lastGateStats.gateUsed.toFixed(4)
+        +" (상대 "+lastGateStats.relGate.toFixed(4)+" vs 절대 "+LEVEL_GATE.toFixed(4)+")");
     }
+    html += row("볼륨 게이트 컷 (너무 작음)", d.gatedByLevel, d.gatedByLevel>0&&d.voicedFrames===0?"warnc":"");
+    html += row("clarity 컷 (prob≤0.5)", d.gatedByProb, d.gatedByProb>0&&d.voicedFrames===0?"warnc":"");
+    html += row("주파수 범위 밖 (60~1200Hz 벗어남)", d.gatedByRange);
     if(d.voicedFrames>0){
       html += "<h3 style='margin-top:12px;'>④ 검출된 음</h3>";
       html += row("주파수 범위", d.minHz.toFixed(0)+" ~ "+d.maxHz.toFixed(0)+" Hz");
       html += row("음 범위(근사)", noteFromCentDbg(d.minCent)+" ~ "+noteFromCentDbg(d.maxCent));
       html += row("검출된 음 목록", d.notes||"–");
       html += row("프레임 RMS 최대/평균", d.frameMaxRms.toFixed(4)+" / "+d.frameAvgRms.toFixed(4));
-      if(d.confAvg!=null){
-        var cutTxt = d.engine==="CREPE" ? CREPE_CONF_CUT.toFixed(2) : PROB_CUT.toFixed(2);
-        var confCls = d.confAvg>=0.6 ? "good" : (d.confAvg>=0.4?"warnc":"bad");
-        html += row(d.engine==="CREPE"?"CREPE 신뢰도 평균/최소":"clarity 평균/최소",
-          d.confAvg.toFixed(2)+" / "+d.confMin.toFixed(2)+" (컷 "+cutTxt+")", confCls);
-      }
     }
   } else {
     html += "<div class='dbg-verdict'>아직 분석 전. 📊 분석하기를 누르면 ② 피치 검출 단계 값이 채워집니다.</div>";
@@ -1027,32 +836,25 @@ function medianFilterOctave(frames){
   var voiced = frames.filter(function(f){ return f.cent!==null; });
   if(voiced.length<5) return;
 
-  // CREPE는 옥타브 오류에 강하므로, 목소리 하모닉을 겨냥한 공격적 옥타브 접기(A/B)를
-  // 건너뛴다. (넓은 음역 멜로디를 억지로 한 옥타브로 접어 망치는 부작용 방지.)
-  // 단발 튐 제거(C)만 공통 적용. YIN 폴백일 때만 A/B 수행.
-  var isCrepe = (lastEngineUsed === "CREPE");
+  // (A) 전역 중앙값 기준 옥타브 접기
+  var globalMed = median(voiced.map(function(f){return f.cent;}));
+  voiced.forEach(function(f){
+    var d = f.cent - globalMed;
+    while(d > 900){ f.cent -= 1200; f.freq/=2; d-=1200; }
+    while(d < -900){ f.cent += 1200; f.freq*=2; d+=1200; }
+  });
 
-  if(!isCrepe){
-    // (A) 전역 중앙값 기준 옥타브 접기
-    var globalMed = median(voiced.map(function(f){return f.cent;}));
-    voiced.forEach(function(f){
-      var d = f.cent - globalMed;
-      while(d > 900){ f.cent -= 1200; f.freq/=2; d-=1200; }
-      while(d < -900){ f.cent += 1200; f.freq*=2; d+=1200; }
-    });
-
-    // (B) 지역 중앙값(±5 프레임) 기준 옥타브 접기
-    var W=5;
-    for(var i=0;i<voiced.length;i++){
-      var lo=Math.max(0,i-W), hi=Math.min(voiced.length-1,i+W);
-      var win=[];
-      for(var j=lo;j<=hi;j++) if(j!==i) win.push(voiced[j].cent);
-      if(win.length<2) continue;
-      var lmed=median(win);
-      var d = voiced[i].cent - lmed;
-      while(d > 900){ voiced[i].cent -= 1200; voiced[i].freq/=2; d-=1200; }
-      while(d < -900){ voiced[i].cent += 1200; voiced[i].freq*=2; d+=1200; }
-    }
+  // (B) 지역 중앙값(±5 프레임) 기준 옥타브 접기
+  var W=5;
+  for(var i=0;i<voiced.length;i++){
+    var lo=Math.max(0,i-W), hi=Math.min(voiced.length-1,i+W);
+    var win=[];
+    for(var j=lo;j<=hi;j++) if(j!==i) win.push(voiced[j].cent);
+    if(win.length<2) continue;
+    var lmed=median(win);
+    var d = voiced[i].cent - lmed;
+    while(d > 900){ voiced[i].cent -= 1200; voiced[i].freq/=2; d-=1200; }
+    while(d < -900){ voiced[i].cent += 1200; voiced[i].freq*=2; d+=1200; }
   }
 
   // (C) 단발 점프 스무딩: 양옆과 모두 500cent 이상 벌어진 고립 프레임은
@@ -1088,52 +890,14 @@ function stddev(arr){
 var analyzeBtnEl=document.getElementById("analyzeBtn");
 var prevScore=null; // 전/후 비교용
 
-var lastEngineUsed = null; // "CREPE" | "YIN" (디버그 표시용)
-
-analyzeBtn.addEventListener("click", async function(){
+analyzeBtn.addEventListener("click", function(){
   if(!lastRecordedSamples || lastRecordedSamples.length < recSampleRate*0.4){
     recStatus.textContent="분석할 녹음이 없어요. 다시 녹음하세요."; return;
   }
   // ★ 핵심: 분석 전 볼륨 정규화. 작게 녹음돼도 게이트를 통과하도록 통째로 키움.
   //   음정(주파수)은 안 바뀌고 크기만 커짐 → 진단 정확도엔 안전.
   var normSamples = normalizeSamples(lastRecordedSamples);
-
-  var frames = null;
-  analyzeBtn.disabled = true;
-  var prevBtnTxt = analyzeBtn.textContent;
-
-  // ── CREPE 우선 시도 ──
-  try{
-    recStatus.textContent = "🧠 AI 피치검출(CREPE) 준비 중…";
-    analyzeBtn.textContent = "AI 모델 불러오는 중…";
-    var ok = await ensureCrepe(function(msg){
-      recStatus.textContent = "🧠 "+msg;
-    });
-    if(ok){
-      recStatus.textContent = "🧠 CREPE로 분석 중… (백엔드 "+crepeState.backend+")";
-      frames = await extractPitchTrackCrepe(normSamples, recSampleRate, FRAME_MS);
-      lastEngineUsed = "CREPE";
-    }
-  }catch(e){
-    // CREPE 추론 중 예외 → 폴백
-    crepeState.status = crepeState.status==="ready" ? "ready" : "failed";
-    crepeState.err = crepeState.err || (e && e.message) || String(e);
-    frames = null;
-  }
-
-  // ── 폴백: YIN ──
-  if(!frames || frames.length===0){
-    recStatus.textContent = "YIN(폴백)으로 분석 중…";
-    frames = extractPitchTrack(normSamples, recSampleRate);
-    lastEngineUsed = "YIN";
-    if(!lastGateStats) lastGateStats = {};
-    lastGateStats.engine = "YIN"
-      + (crepeState.status==="failed" ? " (CREPE 실패: "+(crepeState.err||"?")+")" : "");
-  }
-
-  analyzeBtn.disabled = false;
-  analyzeBtn.textContent = prevBtnTxt;
-
+  var frames = extractPitchTrack(normSamples, recSampleRate);
   medianFilterOctave(frames);
   var voiced = frames.filter(function(f){ return f.cent!==null; });
   var voicedRatio = voiced.length / Math.max(1,frames.length);
