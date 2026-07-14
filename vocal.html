@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>음정거울 · 녹음 보컬 진단</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; background: #0c0e14; color: #e8ecf4;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { padding: 16px 14px 40px; max-width: 560px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0 0 4px; font-weight: 800; }
+  .sub { font-size: 12px; color: #8a91a3; margin: 0 0 14px; line-height: 1.55; }
+  button { font-size: 15px; font-weight: 700; border: 0; border-radius: 12px;
+    padding: 14px 18px; width: 100%; cursor: pointer; }
+  .btn-main { background: #3b6dff; color: #fff; }
+  .btn-main:active { background: #2d55cc; }
+  .btn-rec { background: #e5384d; color: #fff; }
+  .btn-rec:active { background: #b82a3b; }
+  .btn-sec { background: #1a1e2b; color: #cdd3e0; border: 1px solid #2a3040; margin-top: 8px; }
+  .btn-sec:active { background: #232838; }
+  .btn-sec:disabled, .btn-main:disabled { opacity: 0.4; }
+  .card { background: #12151f; border: 1px solid #202538; border-radius: 16px;
+    padding: 16px; margin-top: 12px; }
+  h2 { font-size: 14px; margin: 0 0 10px; color: #aeb6c9; }
+
+  /* 모드 탭 */
+  .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+  .tabs button { flex: 1; font-size: 13px; padding: 12px 8px; background: #1a1e2b;
+    color: #9aa2b5; border: 1px solid #2a3040; }
+  .tabs button.on { background: #3b6dff; color: #fff; border-color: #3b6dff; }
+
+  /* 목표 멜로디 선택 */
+  .mel-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .mel-picker button { width: auto; flex: 0 0 auto; padding: 9px 12px; font-size: 13px;
+    background: #1a1e2b; color: #cdd3e0; border: 1px solid #2a3040; }
+  .mel-picker button.on { background: #26406e; color: #fff; border-color: #3b6dff; }
+  .mel-info { font-size: 12px; color: #8a91a3; margin-top: 8px; line-height: 1.5; }
+  .mel-notes { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .mel-notes span { background: #1a1e2b; border: 1px solid #2a3040; border-radius: 8px;
+    padding: 5px 10px; font-size: 13px; font-weight: 700; color: #cdd3e0; }
+  .mel-notes span.playing { background: #3b6dff; color: #fff; border-color: #3b6dff; }
+
+  .rec-status { text-align: center; font-size: 14px; color: #cdd3e0; margin: 12px 0 4px;
+    min-height: 20px; font-weight: 600; }
+  .rec-time { text-align: center; font-size: 30px; font-weight: 800; letter-spacing: -1px;
+    color: #e5384d; font-variant-numeric: tabular-nums; }
+  .rec-time.idle { color: #3a4056; }
+  .live-wave { width: 100%; height: 60px; display: block; background: #0a0c12;
+    border-radius: 10px; border: 1px solid #202538; margin-top: 10px; }
+
+  /* 결과 */
+  .score-wrap { text-align: center; margin: 6px 0 4px; }
+  .score-num { font-size: 64px; font-weight: 800; line-height: 1; letter-spacing: -2px; }
+  .score-lbl { font-size: 12px; color: #8a91a3; margin-top: 2px; }
+  .score-sub { font-size: 13px; color: #aeb6c9; margin-top: 6px; }
+  .compare { text-align: center; font-size: 14px; margin-top: 8px; font-weight: 700; }
+
+  .graph-wrap { position: relative; margin-top: 6px; }
+  .graph { width: 100%; height: 220px; display: block; background: #0a0c12;
+    border-radius: 10px; border: 1px solid #202538; }
+  .legend { display: flex; gap: 14px; justify-content: center; font-size: 11px;
+    color: #8a91a3; margin-top: 8px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .swatch { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+
+  .diag-list { list-style: none; padding: 0; margin: 0; }
+  .diag-list li { display: flex; gap: 10px; padding: 9px 0; border-bottom: 1px solid #1a1e2b;
+    font-size: 13px; line-height: 1.5; }
+  .diag-list li:last-child { border-bottom: 0; }
+  .diag-icon { flex-shrink: 0; font-size: 15px; width: 20px; text-align: center; }
+  .diag-txt b { color: #fff; }
+
+  .headline { background: #171b28; border: 1px solid #2a3550; border-radius: 12px;
+    padding: 14px; margin-top: 4px; }
+  .headline .tag { font-size: 11px; color: #ffb454; font-weight: 700; letter-spacing: 0.5px; }
+  .headline .msg { font-size: 15px; font-weight: 700; margin-top: 5px; line-height: 1.5; }
+  .headline .tip { font-size: 13px; color: #9fd6ff; margin-top: 8px; line-height: 1.5; }
+
+  /* 구간별 표 */
+  .seg-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+  .seg-table th { text-align: center; color: #7a8296; font-weight: 600; padding: 6px 4px;
+    border-bottom: 1px solid #202538; }
+  .seg-table td { text-align: center; padding: 8px 4px; border-bottom: 1px solid #14171f; }
+  .seg-note { font-weight: 800; font-size: 14px; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px;
+    font-weight: 700; }
+
+  .warn { font-size: 12px; color: #ffb454; line-height: 1.65; }
+  .checklist { font-size: 13px; line-height: 1.75; color: #c2c8d6; }
+  code { background:#1a1e2b; padding:1px 5px; border-radius:4px; font-size:12px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<h1>🪞 음정거울 · 녹음 보컬 진단</h1>
+<p class="sub">한 소절을 <b>반주 없이 목소리만</b> 녹음하면, 통째로 분석해서 음정 곡선과 버릇을 진단합니다. 실시간 튜너가 아니라 <b>부르고 → 멈추고 → 리포트</b> 방식.</p>
+
+<div class="tabs">
+  <button id="tabFollow" class="on">🎯 따라부르기</button>
+  <button id="tabFree">🎙️ 자유 분석</button>
+</div>
+
+<!-- ===== 따라부르기: 목표 멜로디 ===== -->
+<div class="card" id="followCard">
+  <h2>목표 멜로디 고르기</h2>
+  <div class="mel-picker" id="melPicker"></div>
+  <div class="mel-notes" id="melNotes"></div>
+  <div class="mel-info" id="melInfo"></div>
+  <button class="btn-sec" id="playMel" style="margin-top:12px;">🔊 목표 멜로디 듣기</button>
+  <p class="sub" style="margin:10px 0 0;">먼저 듣고 → 아래 녹음 버튼 누르고 → <b>같은 음/박자로 따라 부르세요.</b> 한 음당 약 1초.</p>
+</div>
+
+<!-- 자유 모드 안내 -->
+<div class="card hidden" id="freeCard">
+  <h2>자유 분석 모드</h2>
+  <p class="sub" style="margin:0;">목표 없이 아무 소절이나 부르세요. 정답 판정은 안 하고 <b>음정 안정성 · 흔들림 · 음 이동 부드러움</b>만 리포트합니다. (예: "아~" 한 음을 길게, 또는 짧은 노래 한 소절)</p>
+</div>
+
+<!-- ===== 녹음 ===== -->
+<div class="card">
+  <div class="rec-status" id="recStatus">마이크 준비됨. 아래 버튼을 누르면 녹음 시작.</div>
+  <div class="rec-time idle" id="recTime">0.0s</div>
+  <canvas class="live-wave" id="liveWave" width="600" height="120"></canvas>
+  <button class="btn-rec" id="recBtn" style="margin-top:12px;">🎤 녹음 시작</button>
+  <button class="btn-main hidden" id="analyzeBtn" style="margin-top:8px;">📊 분석하기</button>
+  <p class="sub" id="micHint" style="margin-top:10px;">※ 첫 녹음 시 마이크 권한 허용 필요. HTTPS(GitHub Pages) 또는 localhost에서만 동작.</p>
+</div>
+
+<!-- ===== 결과 ===== -->
+<div class="card hidden" id="resultCard">
+  <h2 id="resultTitle">진단 결과</h2>
+
+  <div class="score-wrap" id="scoreWrap">
+    <div class="score-num" id="scoreNum">–</div>
+    <div class="score-lbl" id="scoreLbl">음정 정확도</div>
+    <div class="score-sub" id="scoreSub"></div>
+    <div class="compare" id="compareTxt"></div>
+  </div>
+
+  <div class="graph-wrap">
+    <canvas class="graph" id="graph" width="600" height="440"></canvas>
+  </div>
+  <div class="legend" id="legend"></div>
+
+  <div id="segBlock" style="margin-top:16px;">
+    <h2>구간별 정확도</h2>
+    <table class="seg-table" id="segTable"></table>
+  </div>
+
+  <div style="margin-top:16px;">
+    <h2>🔍 보컬 버릇 진단 (검출 데이터 기반)</h2>
+    <ul class="diag-list" id="diagList"></ul>
+  </div>
+
+  <div style="margin-top:16px;">
+    <div class="headline" id="headline"></div>
+  </div>
+
+  <p class="sub" id="honestNote" style="margin-top:14px;"></p>
+</div>
+
+<!-- ===== 안내/한계 ===== -->
+<div class="card">
+  <h2>📱 오너 테스트 방법</h2>
+  <ul class="checklist">
+    <li>이 파일을 GitHub Pages(pitch-mirror)에 올리고 <b>폰 브라우저</b>로 열기 (마이크는 HTTPS 필수)</li>
+    <li>따라부르기: 목표 멜로디 듣기 → 녹음 → 같은 음 따라 부르기 → 분석</li>
+    <li>확인 포인트: <b>음정 곡선이 내가 부른 것과 비슷한가</b> / 구간별 오차가 말이 되나 / 버릇 진단이 실제 내 습관과 맞나</li>
+    <li>같은 멜로디 2번 녹음해서 "전/후 점수"가 개선을 반영하나 확인</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h2>⚠️ 이 방식의 정직한 한계</h2>
+  <p class="warn">
+  • <b>반주 있으면 안 됨(단선율만).</b> MR/피아노 깔고 부르면 분석 망가짐 — 목소리만.<br>
+  • <b>저음 옥타브 튐.</b> 남성 저음(~80Hz)은 한 옥타브 위/아래로 잘못 잡힐 수 있음 → 곡선에 튄 점으로 보임.<br>
+  • <b>마이크·거리·소음 의존.</b> 폰마다 결과 다름. 조용한 곳에서, 마이크 20~30cm.<br>
+  • <b>무성음/숨소리/자음</b> 구간은 음정이 없어 "분석 불가"로 비워둠 — 지어내지 않음.<br>
+  • <b>에이전트(나)는 마이크 실측 불가</b> → 문법·로직만 검증. 진단이 맞는지는 <b>오너가 직접 불러서</b> 확인.
+  </p>
+</div>
+
+<div class="card">
+  <h2>🔧 어떻게 분석하나 (정직 보고)</h2>
+  <p class="sub" style="margin:0;">
+  • 녹음: Web Audio로 원시 샘플을 직접 모음(<code>ScriptProcessor</code>). 압축 없는 raw PCM.<br>
+  • 분석: 녹음 전체를 <b>25ms 간격 프레임</b>으로 잘라 각 프레임에 <b>YIN 피치검출</b>(spike.html 검증 엔진 재사용) → 시간축 음정 곡선.<br>
+  • 무성음/저신뢰 프레임은 버림(구멍). 남은 유효 프레임만으로 통계.<br>
+  • 따라부르기: 목표 멜로디를 시간축에 정렬해 각 음 구간의 중앙값 cent 오차를 계산.<br>
+  • 버릇 진단: <b>실제 검출값의 통계</b>(첫음 진입 오차, cent 표준편차=흔들림, 음 이동 시간, 전체 편향)로만 판단. 데이터 부족하면 "판단 불가"로 표기.
+  </p>
+</div>
+
+<script>
+"use strict";
+/* ==================================================================
+   음이름 유틸 + YIN  (spike.html 검증 로직 재사용)
+   ================================================================== */
+var NOTE_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+function freqToNote(freq){
+  var midi = 69 + 12 * Math.log2(freq/440);
+  var midiRound = Math.round(midi);
+  var cents = Math.round((midi - midiRound) * 100);
+  var name = NOTE_NAMES[((midiRound % 12) + 12) % 12];
+  var octave = Math.floor(midiRound/12) - 1;
+  var refFreq = 440 * Math.pow(2, (midiRound - 69)/12);
+  return { name:name, octave:octave, cents:cents, refFreq:refFreq, midi:midiRound };
+}
+function noteToFreq(midi){ return 440 * Math.pow(2, (midi-69)/12); }
+function midiName(midi){ var n=freqToNote(noteToFreq(midi)); return n.name+n.octave; }
+// 절대 cent (연속적인 피치 축): 440Hz=A4=6900cent 기준
+function freqToAbsCent(freq){ return 6900 + 1200 * Math.log2(freq/440); }
+function midiToAbsCent(midi){ return (midi-69)*100 + 6900; }
+
+// YIN (spike.html 그대로)
+function yinDetect(buf, sampleRate, threshold){
+  var tau, i;
+  var yinBufLen = Math.floor(buf.length/2);
+  var yinBuf = new Float32Array(yinBufLen);
+  for(tau=0; tau<yinBufLen; tau++) yinBuf[tau]=0;
+  for(tau=1; tau<yinBufLen; tau++){
+    for(i=0; i<yinBufLen; i++){
+      var delta = buf[i] - buf[i+tau];
+      yinBuf[tau] += delta*delta;
+    }
+  }
+  yinBuf[0]=1;
+  var running=0;
+  for(tau=1; tau<yinBufLen; tau++){
+    running += yinBuf[tau];
+    yinBuf[tau] *= tau/running;
+  }
+  var tauEstimate = -1;
+  for(tau=2; tau<yinBufLen; tau++){
+    if(yinBuf[tau] < threshold){
+      while(tau+1 < yinBufLen && yinBuf[tau+1] < yinBuf[tau]) tau++;
+      tauEstimate = tau;
+      break;
+    }
+  }
+  if(tauEstimate === -1) return { freq:-1, prob:0 };
+  var probability = 1 - yinBuf[tauEstimate];
+  var betterTau;
+  var x0 = (tauEstimate<1)?tauEstimate:tauEstimate-1;
+  var x2 = (tauEstimate+1<yinBufLen)?tauEstimate+1:tauEstimate;
+  if(x0===tauEstimate){
+    betterTau = (yinBuf[tauEstimate]<=yinBuf[x2])?tauEstimate:x2;
+  } else if(x2===tauEstimate){
+    betterTau = (yinBuf[tauEstimate]<=yinBuf[x0])?tauEstimate:x0;
+  } else {
+    var s0=yinBuf[x0], s1=yinBuf[tauEstimate], s2=yinBuf[x2];
+    betterTau = tauEstimate + (s2-s0)/(2*(2*s1-s2-s0));
+  }
+  return { freq: sampleRate/betterTau, prob: probability };
+}
+function rms(b){ var s=0; for(var i=0;i<b.length;i++) s+=b[i]*b[i]; return Math.sqrt(s/b.length); }
+
+/* ==================================================================
+   목표 멜로디 정의  (한 음당 duration 초)
+   ================================================================== */
+var MELODIES = [
+  { id:"long", label:"한 음 길게 (기초)",
+    seq:[{midi:60,dur:3.0}], desc:"도(C4) 하나를 3초 길게. 흔들림 보기 딱 좋음." },
+  { id:"domiso", label:"도미솔미도",
+    seq:[{midi:60,dur:1},{midi:64,dur:1},{midi:67,dur:1},{midi:64,dur:1},{midi:60,dur:1}],
+    desc:"3화음 오르내림. 음 이동 정확도 보기 좋음." },
+  { id:"scale", label:"도레미파솔 (상행)",
+    seq:[{midi:60,dur:0.8},{midi:62,dur:0.8},{midi:64,dur:0.8},{midi:65,dur:0.8},{midi:67,dur:0.8}],
+    desc:"한 음씩 올라가기. 반음/온음 감각 체크." },
+  { id:"twinkle", label:"반짝반짝 (도도솔솔라라솔)",
+    seq:[{midi:60,dur:0.6},{midi:60,dur:0.6},{midi:67,dur:0.6},{midi:67,dur:0.6},
+         {midi:69,dur:0.6},{midi:69,dur:0.6},{midi:67,dur:1.0}],
+    desc:"익숙한 멜로디. 도약(도→솔) 정확도." },
+  { id:"low", label:"낮은 음 (남성용 라솔파)",
+    seq:[{midi:57,dur:1},{midi:55,dur:1},{midi:53,dur:1}],
+    desc:"A3~F3 저음. 저음에서 검출 잘 되나 확인 겸." }
+];
+var currentMel = MELODIES[1];
+
+var melPicker = document.getElementById("melPicker");
+var melNotes = document.getElementById("melNotes");
+var melInfo = document.getElementById("melInfo");
+
+function renderMelPicker(){
+  melPicker.innerHTML="";
+  MELODIES.forEach(function(m){
+    var b=document.createElement("button");
+    b.textContent=m.label;
+    if(m.id===currentMel.id) b.className="on";
+    b.addEventListener("click", function(){ currentMel=m; renderMelPicker(); resetResultForNewTake(); });
+    melPicker.appendChild(b);
+  });
+  melNotes.innerHTML="";
+  currentMel.seq.forEach(function(s,i){
+    var sp=document.createElement("span");
+    sp.textContent=midiName(s.midi);
+    sp.setAttribute("data-i", i);
+    melNotes.appendChild(sp);
+  });
+  var total=currentMel.seq.reduce(function(a,s){return a+s.dur;},0);
+  melInfo.textContent = currentMel.desc + "  (총 "+total.toFixed(1)+"초)";
+}
+
+/* ==================================================================
+   모드 전환
+   ================================================================== */
+var mode = "follow"; // "follow" | "free"
+var tabFollow=document.getElementById("tabFollow");
+var tabFree=document.getElementById("tabFree");
+var followCard=document.getElementById("followCard");
+var freeCard=document.getElementById("freeCard");
+function setMode(m){
+  mode=m;
+  tabFollow.classList.toggle("on", m==="follow");
+  tabFree.classList.toggle("on", m==="free");
+  followCard.classList.toggle("hidden", m!=="follow");
+  freeCard.classList.toggle("hidden", m==="free"?false:true);
+  resetResultForNewTake();
+  prevScore=null; // 모드 바꾸면 전/후 비교 초기화
+}
+tabFollow.addEventListener("click", function(){ setMode("follow"); });
+tabFree.addEventListener("click", function(){ setMode("free"); });
+
+/* ==================================================================
+   목표 멜로디 재생 (오실레이터)
+   ================================================================== */
+var toneCtx=null;
+document.getElementById("playMel").addEventListener("click", function(){
+  try{
+    if(!toneCtx) toneCtx=new (window.AudioContext||window.webkitAudioContext)();
+    if(toneCtx.state==="suspended") toneCtx.resume();
+    var t = toneCtx.currentTime + 0.05;
+    var spans = melNotes.querySelectorAll("span");
+    currentMel.seq.forEach(function(s,i){
+      var osc=toneCtx.createOscillator();
+      var g=toneCtx.createGain();
+      osc.type="triangle";
+      osc.frequency.value=noteToFreq(s.midi);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.22, t+0.03);
+      g.gain.setValueAtTime(0.22, t+s.dur-0.06);
+      g.gain.exponentialRampToValueAtTime(0.0001, t+s.dur-0.005);
+      osc.connect(g); g.connect(toneCtx.destination);
+      osc.start(t); osc.stop(t+s.dur);
+      // 시각 하이라이트
+      (function(idx, startT){
+        var delayMs = (startT - toneCtx.currentTime)*1000;
+        setTimeout(function(){
+          spans.forEach(function(sp){ sp.classList.remove("playing"); });
+          if(spans[idx]) spans[idx].classList.add("playing");
+        }, Math.max(0, delayMs));
+      })(i, t);
+      t += s.dur;
+    });
+    setTimeout(function(){ spans.forEach(function(sp){ sp.classList.remove("playing"); }); },
+      (t - toneCtx.currentTime)*1000 + 50);
+  }catch(e){ /* 무음 실패는 무시 */ }
+});
+
+/* ==================================================================
+   녹음 (raw PCM 직접 수집)
+   ================================================================== */
+var audioCtx=null, micStream=null, procNode=null, srcNode=null;
+var recording=false;
+var recChunks=[];       // Float32Array 조각들
+var recSampleRate=44100;
+var recStartTime=0;
+var recRafId=null;
+var lastRecordedSamples=null; // 분석용 Float32Array
+
+var recBtn=document.getElementById("recBtn");
+var analyzeBtn=document.getElementById("analyzeBtn");
+var recStatus=document.getElementById("recStatus");
+var recTime=document.getElementById("recTime");
+var liveWave=document.getElementById("liveWave");
+var lwCtx=liveWave.getContext("2d");
+var micHint=document.getElementById("micHint");
+
+var MAX_REC_SEC = 15;
+
+async function ensureMic(){
+  if(micStream) return true;
+  try{
+    recStatus.textContent="마이크 권한 요청 중...";
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:false }
+    });
+    audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+    if(audioCtx.state==="suspended") await audioCtx.resume();
+    recSampleRate = audioCtx.sampleRate;
+    micHint.textContent = "샘플레이트 "+recSampleRate+"Hz · 마이크 준비됨";
+    return true;
+  }catch(e){
+    recStatus.textContent="⚠️ 마이크 실패: "+e.message+" (HTTPS/권한 확인)";
+    return false;
+  }
+}
+
+recBtn.addEventListener("click", async function(){
+  if(recording){ stopRecording(); return; }
+  var ok = await ensureMic();
+  if(!ok) return;
+  startRecording();
+});
+
+function startRecording(){
+  recChunks=[];
+  recording=true;
+  recStartTime = performance.now();
+  srcNode = audioCtx.createMediaStreamSource(micStream);
+  // ScriptProcessor: 구식이지만 raw 수집엔 확실하고 폰 호환 좋음
+  procNode = audioCtx.createScriptProcessor(4096, 1, 1);
+  procNode.onaudioprocess = function(e){
+    if(!recording) return;
+    var input = e.inputBuffer.getChannelData(0);
+    recChunks.push(new Float32Array(input)); // 복사 필수(버퍼 재사용됨)
+  };
+  srcNode.connect(procNode);
+  // 일부 브라우저는 destination에 연결돼야 onaudioprocess가 돎 (무음 게인)
+  var silent = audioCtx.createGain(); silent.gain.value=0;
+  procNode.connect(silent); silent.connect(audioCtx.destination);
+
+  recBtn.textContent="■ 녹음 멈추기";
+  recBtn.classList.remove("btn-rec"); recBtn.classList.add("btn-main");
+  recStatus.textContent = mode==="follow" ? "🎤 목표 멜로디를 따라 부르세요!" : "🎤 소절을 부르세요!";
+  recTime.classList.remove("idle");
+  analyzeBtn.classList.add("hidden");
+  document.getElementById("resultCard").classList.add("hidden");
+  drawLiveLoop();
+}
+
+function stopRecording(){
+  recording=false;
+  if(recRafId) cancelAnimationFrame(recRafId);
+  if(procNode){ procNode.disconnect(); procNode.onaudioprocess=null; procNode=null; }
+  if(srcNode){ srcNode.disconnect(); srcNode=null; }
+  // 합치기
+  var total=0; recChunks.forEach(function(c){ total+=c.length; });
+  var merged = new Float32Array(total);
+  var off=0; recChunks.forEach(function(c){ merged.set(c,off); off+=c.length; });
+  lastRecordedSamples = merged;
+
+  recBtn.textContent="🎤 다시 녹음";
+  recBtn.classList.remove("btn-main"); recBtn.classList.add("btn-rec");
+  recTime.classList.add("idle");
+  var secs = total/recSampleRate;
+  if(secs < 0.4){
+    recStatus.textContent="⚠️ 너무 짧아요 ("+secs.toFixed(1)+"s). 다시 녹음하세요.";
+    analyzeBtn.classList.add("hidden");
+  } else {
+    recStatus.textContent="녹음 완료 · "+secs.toFixed(1)+"초. 아래 분석하기를 누르세요.";
+    analyzeBtn.classList.remove("hidden");
+  }
+}
+
+function drawLiveLoop(){
+  if(!recording) return;
+  var elapsed = (performance.now()-recStartTime)/1000;
+  recTime.textContent = elapsed.toFixed(1)+"s";
+  if(elapsed >= MAX_REC_SEC){ stopRecording(); return; }
+  // 마지막 청크 파형 그리기
+  var w=liveWave.width, h=liveWave.height;
+  lwCtx.clearRect(0,0,w,h);
+  lwCtx.fillStyle="#0a0c12"; lwCtx.fillRect(0,0,w,h);
+  var chunk = recChunks.length ? recChunks[recChunks.length-1] : null;
+  if(chunk){
+    lwCtx.strokeStyle="#e5384d"; lwCtx.lineWidth=1.5; lwCtx.beginPath();
+    var step = Math.max(1, Math.floor(chunk.length/w));
+    for(var x=0;x<w;x++){
+      var idx=x*step; if(idx>=chunk.length) break;
+      var y = h/2 - chunk[idx]*h*0.9;
+      if(x===0) lwCtx.moveTo(x,y); else lwCtx.lineTo(x,y);
+    }
+    lwCtx.stroke();
+    var lvl = rms(chunk);
+    lwCtx.fillStyle= lvl>0.02 ? "#3cdc82" : "#5a627a";
+    lwCtx.fillRect(4, h-8, Math.min(w-8, lvl*3000), 4);
+  }
+  recRafId = requestAnimationFrame(drawLiveLoop);
+}
+
+/* ==================================================================
+   분석: raw 샘플 -> 프레임별 피치 곡선
+   ================================================================== */
+var FRAME_MS = 25;      // 프레임 간격
+var WIN_SIZE = 2048;    // YIN 윈도우 (spike와 동일)
+
+function extractPitchTrack(samples, sr){
+  var hop = Math.floor(sr * FRAME_MS/1000);
+  var frames=[]; // {t, freq, prob, cent, level}
+  var win = new Float32Array(WIN_SIZE);
+  for(var start=0; start+WIN_SIZE<=samples.length; start+=hop){
+    for(var i=0;i<WIN_SIZE;i++) win[i]=samples[start+i];
+    var lvl = rms(win);
+    var t = (start+WIN_SIZE/2)/sr;
+    var entry = { t:t, freq:-1, prob:0, cent:null, level:lvl };
+    if(lvl > 0.008){
+      var r = yinDetect(win, sr, 0.15);
+      if(r.freq>60 && r.freq<1200 && r.prob>0.5){
+        entry.freq=r.freq; entry.prob=r.prob; entry.cent=freqToAbsCent(r.freq);
+      }
+    }
+    frames.push(entry);
+  }
+  return frames;
+}
+
+// 옥타브 튐(잘못된 검출) 완화: 이웃 중앙값 대비 ±1옥타브 벗어난 튐을 보정
+function medianFilterOctave(frames){
+  var voiced = frames.filter(function(f){ return f.cent!==null; });
+  if(voiced.length<5) return;
+  // 전체 중앙 cent
+  var cents = voiced.map(function(f){return f.cent;}).sort(function(a,b){return a-b;});
+  var med = cents[Math.floor(cents.length/2)];
+  frames.forEach(function(f){
+    if(f.cent===null) return;
+    // 중앙값에서 ±700cent 이상 떨어졌고, 옥타브 이동(±1200±100)이면 옥타브 오류로 간주해 접기
+    var d = f.cent - med;
+    while(d > 900){ f.cent -= 1200; f.freq/=2; d-=1200; }
+    while(d < -900){ f.cent += 1200; f.freq*=2; d+=1200; }
+  });
+}
+
+function median(arr){
+  if(!arr.length) return null;
+  var s=arr.slice().sort(function(a,b){return a-b;});
+  var m=Math.floor(s.length/2);
+  return s.length%2 ? s[m] : (s[m-1]+s[m])/2;
+}
+function stddev(arr){
+  if(arr.length<2) return 0;
+  var mean=arr.reduce(function(a,b){return a+b;},0)/arr.length;
+  var v=arr.reduce(function(a,b){return a+(b-mean)*(b-mean);},0)/arr.length;
+  return Math.sqrt(v);
+}
+
+/* ==================================================================
+   분석 실행
+   ================================================================== */
+var analyzeBtnEl=document.getElementById("analyzeBtn");
+var prevScore=null; // 전/후 비교용
+
+analyzeBtn.addEventListener("click", function(){
+  if(!lastRecordedSamples || lastRecordedSamples.length < recSampleRate*0.4){
+    recStatus.textContent="분석할 녹음이 없어요. 다시 녹음하세요."; return;
+  }
+  var frames = extractPitchTrack(lastRecordedSamples, recSampleRate);
+  medianFilterOctave(frames);
+  var voiced = frames.filter(function(f){ return f.cent!==null; });
+  var voicedRatio = voiced.length / Math.max(1,frames.length);
+
+  if(voiced.length < 4){
+    showLowData(voicedRatio);
+    return;
+  }
+  if(mode==="follow") analyzeFollow(frames, voiced, voicedRatio);
+  else analyzeFree(frames, voiced, voicedRatio);
+});
+
+function showLowData(ratio){
+  var rc=document.getElementById("resultCard");
+  rc.classList.remove("hidden");
+  document.getElementById("scoreNum").textContent="?";
+  document.getElementById("scoreNum").style.color="#7a8296";
+  document.getElementById("scoreLbl").textContent="분석 불가";
+  document.getElementById("scoreSub").textContent="유효한 음정이 거의 안 잡혔어요 (유성음 "+(ratio*100).toFixed(0)+"%).";
+  document.getElementById("compareTxt").textContent="";
+  document.getElementById("legend").innerHTML="";
+  document.getElementById("segBlock").classList.add("hidden");
+  var g=document.getElementById("graph"); g.getContext("2d").clearRect(0,0,g.width,g.height);
+  document.getElementById("diagList").innerHTML=
+    "<li><span class='diag-icon'>⚠️</span><span class='diag-txt'>목소리가 너무 작거나, 소음/반주가 섞였거나, 마이크가 멀 수 있어요. 조용한 곳에서 마이크 가까이 대고 또렷하게 다시 불러보세요.</span></li>";
+  document.getElementById("headline").innerHTML=
+    "<div class='tag'>판단 불가</div><div class='msg'>데이터가 부족해 진단하지 않습니다.</div>"+
+    "<div class='tip'>지어내지 않기 위해, 근거가 없으면 진단을 생략합니다.</div>";
+  document.getElementById("honestNote").textContent="";
+  rc.scrollIntoView({behavior:"smooth"});
+  document.getElementById("resultTitle").textContent="진단 결과";
+  rc.style.color="";
+  rc.style.opacity="";
+}
+
+/* ---------- 따라부르기 분석 ---------- */
+function analyzeFollow(frames, voiced, voicedRatio){
+  // 목표 멜로디 총 길이 vs 녹음 유효 구간을 시간 정렬.
+  // 유저가 목표보다 늦게 시작/일찍 시작할 수 있으니, 첫 유성 프레임을 시작점으로 정렬.
+  var firstVoicedT = voiced[0].t;
+  var lastVoicedT = voiced[voiced.length-1].t;
+  var sungDur = lastVoicedT - firstVoicedT;
+  var melTotal = currentMel.seq.reduce(function(a,s){return a+s.dur;},0);
+  // 시간 스케일: 유저가 부른 총 길이를 목표 길이에 맞춰 신축(템포 차이 흡수)
+  var scale = sungDur > 0.3 ? (melTotal / sungDur) : 1;
+
+  // 각 목표 음 구간에 해당하는 유저 프레임 모으기
+  var segResults=[];
+  var cursor=0; // 목표 누적 시간
+  currentMel.seq.forEach(function(s, si){
+    var segStart = cursor, segEnd = cursor+s.dur;
+    cursor=segEnd;
+    // 구간 안쪽 60%만 사용(전이 구간 배제)
+    var inStart = segStart + s.dur*0.2, inEnd = segEnd - s.dur*0.2;
+    var segCents=[];
+    frames.forEach(function(f){
+      if(f.cent===null) return;
+      var mapped = (f.t - firstVoicedT)*scale; // 목표 시간축으로 매핑
+      if(mapped>=inStart && mapped<inEnd) segCents.push(f.cent);
+    });
+    var medCent = median(segCents);
+    var tgtCent = midiToAbsCent(s.midi);
+    segResults.push({
+      midi:s.midi, targetCent:tgtCent,
+      medianCent:medCent,
+      err: medCent===null ? null : (medCent - tgtCent),
+      jitter: segCents.length>=2 ? stddev(segCents) : null,
+      n: segCents.length
+    });
+  });
+
+  // 점수: 각 구간 |cent 오차| -> 감점. 100 - 평균오차*계수. 무효 구간 제외.
+  var validSegs = segResults.filter(function(r){ return r.err!==null; });
+  var score, avgAbsErr=null;
+  if(validSegs.length===0){
+    showLowData(voicedRatio); return;
+  }
+  avgAbsErr = validSegs.reduce(function(a,r){return a+Math.abs(r.err);},0)/validSegs.length;
+  // 50cent(반음의 절반) 오차면 대략 50점 수준. 완만한 곡선.
+  score = Math.round(Math.max(0, Math.min(100, 100 - avgAbsErr/1.2)));
+
+  renderResult({
+    mode:"follow", score:score, segResults:segResults, validSegs:validSegs,
+    avgAbsErr:avgAbsErr, frames:frames, voiced:voiced, voicedRatio:voicedRatio,
+    firstVoicedT:firstVoicedT, scale:scale, melTotal:melTotal
+  });
+}
+
+/* ---------- 자유 분석 ---------- */
+function analyzeFree(frames, voiced, voicedRatio){
+  // 정답 없음. 안정성/흔들림/이동 부드러움만.
+  // 음 세그먼트로 나누기: cent가 상대적으로 평평한 구간 = 한 음
+  var cents = voiced.map(function(f){return f.cent;});
+  // 전체 흔들림(반음 이내 국소 변동): 인접 프레임 차이의 중앙 절대값
+  var localDiffs=[];
+  for(var i=1;i<voiced.length;i++){
+    if(voiced[i].t - voiced[i-1].t < FRAME_MS/1000*2.5)
+      localDiffs.push(Math.abs(voiced[i].cent - voiced[i-1].cent));
+  }
+  var jitter = median(localDiffs) || 0; // cent/frame, 국소 흔들림
+  // 가장 오래 지속된 평평한 음의 표준편차(그 음 얼마나 흔들렸나)
+  var flatStd = longestFlatStd(voiced);
+
+  renderResult({
+    mode:"free", frames:frames, voiced:voiced, voicedRatio:voicedRatio,
+    jitter:jitter, flatStd:flatStd
+  });
+}
+
+function longestFlatStd(voiced){
+  // 연속되고(시간간격 정상) cent 변화가 완만한 최장 구간을 찾아 std 반환
+  var best=[]; var cur=[];
+  for(var i=0;i<voiced.length;i++){
+    if(cur.length===0){ cur=[voiced[i]]; continue; }
+    var prev=cur[cur.length-1];
+    var gapOK = (voiced[i].t - prev.t) < FRAME_MS/1000*2.5;
+    var flatOK = Math.abs(voiced[i].cent - prev.cent) < 80; // 반음 미만 이동은 같은 음
+    if(gapOK && flatOK){ cur.push(voiced[i]); }
+    else { if(cur.length>best.length) best=cur; cur=[voiced[i]]; }
+  }
+  if(cur.length>best.length) best=cur;
+  if(best.length<3) return null;
+  return stddev(best.map(function(f){return f.cent;}));
+}
+
+/* ==================================================================
+   결과 렌더
+   ================================================================== */
+function renderResult(R){
+  var rc=document.getElementById("resultCard");
+  rc.classList.remove("hidden");
+  document.getElementById("segBlock").classList.toggle("hidden", R.mode!=="follow");
+
+  var scoreNum=document.getElementById("scoreNum");
+  var scoreLbl=document.getElementById("scoreLbl");
+  var scoreSub=document.getElementById("scoreSub");
+  var compareTxt=document.getElementById("compareTxt");
+
+  if(R.mode==="follow"){
+    document.getElementById("resultTitle").textContent="🎯 따라부르기 진단";
+    scoreNum.textContent=R.score;
+    scoreNum.style.color = R.score>=85?"#3cdc82":(R.score>=65?"#f5c542":"#ff5a6e");
+    scoreLbl.textContent="음정 정확도 (100점 만점)";
+    scoreSub.textContent="평균 오차 ±"+R.avgAbsErr.toFixed(0)+"cent · 유성음 "+(R.voicedRatio*100).toFixed(0)+"%"
+      + (R.validSegs.length<currentMel.seq.length ? " · "+(currentMel.seq.length-R.validSegs.length)+"개 음 분석불가" : "");
+    // 전/후 비교
+    if(prevScore!==null){
+      var diff=R.score-prevScore;
+      compareTxt.textContent="첫 시도 "+prevScore+" → 이번 "+R.score+"  ("+(diff>=0?"▲ +"+diff:"▼ "+diff)+")";
+      compareTxt.style.color = diff>0?"#3cdc82":(diff<0?"#ff5a6e":"#8a91a3");
+    } else {
+      compareTxt.textContent="같은 멜로디로 한 번 더 녹음하면 전/후 비교가 나와요.";
+      compareTxt.style.color="#8a91a3";
+    }
+    prevScore=R.score;
+    renderSegTable(R.segResults);
+  } else {
+    document.getElementById("resultTitle").textContent="🎙️ 자유 분석 (안정성 리포트)";
+    // 점수 대신 안정성 등급
+    var stabScore = R.flatStd===null ? null : Math.round(Math.max(0,Math.min(100,100 - R.flatStd/0.5)));
+    if(stabScore===null){ scoreNum.textContent="–"; scoreNum.style.color="#7a8296"; }
+    else { scoreNum.textContent=stabScore; scoreNum.style.color = stabScore>=80?"#3cdc82":(stabScore>=55?"#f5c542":"#ff5a6e"); }
+    scoreLbl.textContent="음정 안정도 (정답 판정 아님)";
+    scoreSub.textContent="국소 흔들림 ±"+R.jitter.toFixed(0)+"cent"
+      + (R.flatStd!==null?" · 최장 지속음 편차 ±"+R.flatStd.toFixed(0)+"cent":"")
+      + " · 유성음 "+(R.voicedRatio*100).toFixed(0)+"%";
+    compareTxt.textContent="자유 모드는 정답이 없어 점수는 참고용(안정도)입니다.";
+    compareTxt.style.color="#8a91a3";
+  }
+
+  drawGraph(R);
+  renderDiagnostics(R);
+}
+
+function renderSegTable(segs){
+  var t=document.getElementById("segTable");
+  var html="<tr><th>목표음</th><th>내 음</th><th>오차</th><th>흔들림</th></tr>";
+  segs.forEach(function(r){
+    if(r.err===null){
+      html+="<tr><td class='seg-note'>"+midiName(r.midi)+"</td><td colspan='3' style='color:#7a8296'>분석 불가 (무성음/미검출)</td></tr>";
+      return;
+    }
+    var absErr=Math.abs(r.err);
+    var color = absErr<=25?"#3cdc82":(absErr<=60?"#f5c542":"#ff5a6e");
+    var bg = absErr<=25?"rgba(60,220,130,0.15)":(absErr<=60?"rgba(245,197,66,0.15)":"rgba(255,90,110,0.15)");
+    var dir = r.err>0?"높음":"낮음";
+    // 내가 낸 음 이름
+    var myMidi=Math.round(69 + (r.medianCent-6900)/100);
+    html+="<tr>"
+      +"<td class='seg-note'>"+midiName(r.midi)+"</td>"
+      +"<td>"+midiName(myMidi)+"</td>"
+      +"<td><span class='pill' style='background:"+bg+";color:"+color+"'>"+(r.err>0?"+":"")+r.err.toFixed(0)+" "+dir+"</span></td>"
+      +"<td style='color:#8a91a3'>"+(r.jitter!==null?"±"+r.jitter.toFixed(0):"–")+"</td>"
+      +"</tr>";
+  });
+  t.innerHTML=html;
+}
+
+/* ---------- 음정 곡선 그래프 ---------- */
+function drawGraph(R){
+  var cv=document.getElementById("graph");
+  var ctx=cv.getContext("2d");
+  var W=cv.width, H=cv.height;
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle="#0a0c12"; ctx.fillRect(0,0,W,H);
+
+  var voiced=R.voiced;
+  if(!voiced.length) return;
+
+  // y축 범위: 유성 cent 최소/최대 + 목표 포함, 여유 200cent
+  var allCents = voiced.map(function(f){return f.cent;});
+  if(R.mode==="follow"){
+    R.segResults.forEach(function(s){ allCents.push(s.targetCent); });
+  }
+  var minC=Math.min.apply(null,allCents)-150;
+  var maxC=Math.max.apply(null,allCents)+150;
+  if(maxC-minC < 400){ var mid=(maxC+minC)/2; minC=mid-200; maxC=mid+200; }
+
+  var padL=44, padR=10, padT=12, padB=22;
+  var plotW=W-padL-padR, plotH=H-padT-padB;
+
+  // 시간 범위
+  var t0=voiced[0].t, t1=voiced[voiced.length-1].t;
+  var tRange = Math.max(0.5, t1-t0);
+  function xOf(t){ return padL + (t-t0)/tRange*plotW; }
+  function yOf(c){ return padT + (maxC-c)/(maxC-minC)*plotH; }
+
+  // 가로 그리드 = 반음(100cent)마다, 음이름 라벨
+  ctx.font="10px -apple-system,sans-serif";
+  var startMidi=Math.floor((minC-6900)/100)+69;
+  var endMidi=Math.ceil((maxC-6900)/100)+69;
+  for(var m=startMidi;m<=endMidi;m++){
+    var c=midiToAbsCent(m);
+    var y=yOf(c);
+    if(y<padT||y>H-padB) continue;
+    var isC = (m%12===0);
+    ctx.strokeStyle=isC?"#2a3348":"#171b26";
+    ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y); ctx.stroke();
+    ctx.fillStyle=isC?"#7a86a0":"#4a5268";
+    ctx.fillText(midiName(m), 4, y+3);
+  }
+
+  // 목표선 (따라부르기): 계단식
+  if(R.mode==="follow"){
+    ctx.strokeStyle="#3b6dff"; ctx.lineWidth=3; ctx.globalAlpha=0.55;
+    ctx.beginPath();
+    var cursor=0;
+    R.segResults.forEach(function(s, i){
+      var segStart=cursor, segEnd=cursor+currentMel.seq[i].dur; cursor=segEnd;
+      // 목표 시간축을 실제 시간축으로 역변환: mapped=(t-first)*scale -> t=first+mapped/scale
+      var xs=xOf(R.firstVoicedT + segStart/R.scale);
+      var xe=xOf(R.firstVoicedT + segEnd/R.scale);
+      var y=yOf(s.targetCent);
+      if(i===0) ctx.moveTo(xs,y); else ctx.lineTo(xs,y);
+      ctx.lineTo(xe,y);
+    });
+    ctx.stroke();
+    ctx.globalAlpha=1;
+  }
+
+  // 내 음정 곡선: 유성 구간만 이어그리기(구멍에서 끊기)
+  ctx.strokeStyle="#3cdc82"; ctx.lineWidth=2.2;
+  ctx.beginPath();
+  var pen=false;
+  for(var i=0;i<R.frames.length;i++){
+    var f=R.frames[i];
+    if(f.cent===null){ pen=false; continue; }
+    var x=xOf(f.t), y=yOf(f.cent);
+    if(!pen){ ctx.moveTo(x,y); pen=true; } else ctx.lineTo(x,y);
+  }
+  ctx.stroke();
+
+  // 무성/미검출 구간 표시(하단 회색 점)
+  ctx.fillStyle="#3a4258";
+  for(var i=0;i<R.frames.length;i++){
+    if(R.frames[i].cent===null && R.frames[i].level>0.004){
+      ctx.fillRect(xOf(R.frames[i].t)-1, H-padB-3, 2, 3);
+    }
+  }
+
+  // 범례
+  var lg=document.getElementById("legend");
+  lg.innerHTML = "<span><i class='swatch' style='background:#3cdc82'></i>내가 부른 음</span>"
+    + (R.mode==="follow" ? "<span><i class='swatch' style='background:#3b6dff'></i>목표 음</span>" : "")
+    + "<span><i class='swatch' style='background:#3a4258'></i>무성/미검출</span>";
+}
+
+/* ==================================================================
+   버릇 진단 (실제 데이터 기반만)
+   ================================================================== */
+function renderDiagnostics(R){
+  var diags=[]; // {icon, text}
+  var headline=null; // {tag,msg,tip}
+
+  if(R.mode==="follow"){
+    var segs=R.validSegs;
+    var errs=segs.map(function(s){return s.err;});
+    var meanErr = errs.reduce(function(a,b){return a+b;},0)/errs.length; // + 높게, - 낮게
+
+    // 1) 전반적 편향
+    if(Math.abs(meanErr) >= 20){
+      diags.push({ icon: meanErr>0?"⬆️":"⬇️",
+        text:"전반적으로 <b>목표보다 "+(meanErr>0?"높게":"낮게")+"</b> 부르는 경향 (평균 "+(meanErr>0?"+":"")+meanErr.toFixed(0)+"cent). "
+          +(Math.abs(meanErr)>=50?"한 음(반음) 가까이 벗어남.":"살짝 치우침.") });
+    } else {
+      diags.push({ icon:"⚖️", text:"전반적 음정 중심은 <b>목표에 잘 맞음</b> (평균 편향 "+(meanErr>0?"+":"")+meanErr.toFixed(0)+"cent)." });
+    }
+
+    // 2) 첫 음 진입
+    if(segs.length>=2){
+      var firstErr=segs[0].err;
+      if(Math.abs(firstErr) >= 30 && Math.abs(firstErr) > Math.abs(meanErr)+15){
+        diags.push({ icon:"🚀",
+          text:"<b>첫 음 시작이 불안정</b> — 시작 음이 목표보다 "+(firstErr>0?"높게":"낮게")+" ("+(firstErr>0?"+":"")+firstErr.toFixed(0)+"cent) 들어감. 첫 음을 목표음 미리 떠올리고 진입하는 연습 필요." });
+      } else {
+        diags.push({ icon:"✅", text:"<b>첫 음 진입은 안정적</b> ("+(firstErr>0?"+":"")+firstErr.toFixed(0)+"cent)." });
+      }
+    }
+
+    // 3) 음 흔들림(구간 jitter 평균)
+    var jitters=segs.filter(function(s){return s.jitter!==null;}).map(function(s){return s.jitter;});
+    if(jitters.length){
+      var avgJit=jitters.reduce(function(a,b){return a+b;},0)/jitters.length;
+      if(avgJit>=35){
+        diags.push({ icon:"〰️", text:"<b>음을 잡고 있을 때 흔들림이 큼</b> (평균 ±"+avgJit.toFixed(0)+"cent). 한 음을 곧게 뻗어 유지하는 롱톤 연습 추천." });
+      } else if(avgJit>=18){
+        diags.push({ icon:"🌊", text:"음 유지 중 약간의 흔들림 (±"+avgJit.toFixed(0)+"cent) — 비브라토거나 미세 불안정." });
+      } else {
+        diags.push({ icon:"🎯", text:"<b>음을 곧게 잘 유지함</b> (흔들림 ±"+avgJit.toFixed(0)+"cent)." });
+      }
+    }
+
+    // 4) 가장 틀린 구간
+    var worst=null;
+    segs.forEach(function(s){ if(worst===null||Math.abs(s.err)>Math.abs(worst.err)) worst=s; });
+    if(worst && Math.abs(worst.err)>=40){
+      diags.push({ icon:"❗", text:"가장 벗어난 음: <b>"+midiName(worst.midi)+"</b> ("+(worst.err>0?"+":"")+worst.err.toFixed(0)+"cent "+(worst.err>0?"높음":"낮음")+")." });
+    }
+
+    // 헤드라인: 가장 큰 문제 하나
+    var absMean=Math.abs(meanErr);
+    var worstAbs=worst?Math.abs(worst.err):0;
+    var avgJit2 = jitters.length? jitters.reduce(function(a,b){return a+b;},0)/jitters.length : 0;
+    if(R.score>=88){
+      headline={ tag:"잘하고 있음", msg:"이 멜로디는 이미 안정적으로 잘 부릅니다.", tip:"더 어려운 멜로디(반짝반짝·상행 스케일)로 넘어가 보세요." };
+    } else if(worstAbs>=50 && worstAbs>=absMean+20){
+      headline={ tag:"가장 큰 문제", msg:midiName(worst.midi)+" 음에서 "+worstAbs.toFixed(0)+"cent "+(worst.err>0?"높게":"낮게")+" 벗어납니다.",
+        tip:"그 음만 따로 목표음 듣고 → 부르고 반복. 도약(음 건너뛰기)일수록 미리 머릿속으로 음 잡기." };
+    } else if(absMean>=30){
+      headline={ tag:"가장 큰 문제", msg:"전체적으로 "+absMean.toFixed(0)+"cent "+(meanErr>0?"높게":"낮게")+" 부르는 편향이 있습니다.",
+        tip:(meanErr>0?"살짝 힘을 빼고 낮춰서":"배에 힘을 주고 살짝 올려서")+" 시작해 보세요. 튜너로 기준음 먼저 맞추기." };
+    } else if(avgJit2>=35){
+      headline={ tag:"가장 큰 문제", msg:"음정 자체는 맞는데 유지 중 흔들림(±"+avgJit2.toFixed(0)+"cent)이 큽니다.",
+        tip:"한 음(도)을 5초간 곧게 뻗는 롱톤을 매일 몇 번. 호흡을 일정하게." };
+    } else {
+      headline={ tag:"관찰", msg:"큰 문제는 없고 세부 편차 위주입니다 (점수 "+R.score+").",
+        tip:"구간별 표에서 노란/빨간 음만 골라 반복 연습하세요." };
+    }
+
+    document.getElementById("honestNote").textContent =
+      "※ 목표와 시간 정렬은 '첫 유성음 = 첫 목표음 시작'으로 맞추고 템포 차이를 신축 보정했습니다. 박자가 크게 어긋나면 구간 매칭이 틀어질 수 있어요 — 그럴 땐 목표 멜로디 듣고 박자까지 맞춰 다시 녹음.";
+
+  } else {
+    // 자유 분석
+    var jit=R.jitter, flat=R.flatStd;
+    if(flat!==null){
+      if(flat<15) diags.push({ icon:"🎯", text:"가장 오래 유지한 음이 <b>매우 안정적</b> (편차 ±"+flat.toFixed(0)+"cent). 곧게 잘 뻗음." });
+      else if(flat<40) diags.push({ icon:"🌊", text:"유지음에 <b>약간의 흔들림</b> (±"+flat.toFixed(0)+"cent). 비브라토거나 미세 불안정." });
+      else diags.push({ icon:"〰️", text:"유지음이 <b>많이 흔들림</b> (±"+flat.toFixed(0)+"cent). 롱톤으로 음을 곧게 유지하는 연습 필요." });
+    } else {
+      diags.push({ icon:"⚠️", text:"충분히 길게 지속된 음이 없어 <b>유지 안정성은 판단 보류</b>. '아~'를 3초 이상 길게 내보면 측정됩니다." });
+    }
+    if(jit<12) diags.push({ icon:"✨", text:"인접 프레임 간 <b>음정 이동이 부드럽고 매끈</b> (±"+jit.toFixed(0)+"cent)." });
+    else if(jit<30) diags.push({ icon:"🌊", text:"음 이동에 약간의 요동 (±"+jit.toFixed(0)+"cent)." });
+    else diags.push({ icon:"〰️", text:"프레임 간 <b>음정이 자주 크게 뜀</b> (±"+jit.toFixed(0)+"cent). 검출 불안정이거나 음정 요동." });
+
+    diags.push({ icon:"ℹ️", text:"자유 모드는 <b>정답을 판정하지 않습니다.</b> '어디가 틀렸다'는 목표가 있는 따라부르기 모드에서만." });
+
+    if(flat!==null && flat>=40){
+      headline={ tag:"안정성 관찰", msg:"유지음 흔들림(±"+flat.toFixed(0)+"cent)이 두드러집니다.",
+        tip:"한 음을 5초 곧게 뻗는 롱톤 연습. 호흡을 일정하게 밀어주세요." };
+    } else if(flat!==null){
+      headline={ tag:"안정성 관찰", msg:"음을 비교적 곧게 유지합니다 (±"+flat.toFixed(0)+"cent).",
+        tip:"따라부르기 모드로 넘어가 '정확도'까지 점검해 보세요." };
+    } else {
+      headline={ tag:"측정 부족", msg:"지속음이 짧아 안정성 판단을 보류했습니다.",
+        tip:"'아~'를 3초 이상 길게 내고 다시 분석하세요." };
+    }
+    document.getElementById("honestNote").textContent =
+      "※ 자유 모드는 목표가 없어 점수는 '안정도' 참고치입니다. 검출 실패 프레임은 계산에서 제외했습니다.";
+  }
+
+  // 렌더
+  var dl=document.getElementById("diagList");
+  dl.innerHTML="";
+  diags.forEach(function(d){
+    var li=document.createElement("li");
+    li.innerHTML="<span class='diag-icon'>"+d.icon+"</span><span class='diag-txt'>"+d.text+"</span>";
+    dl.appendChild(li);
+  });
+  var hl=document.getElementById("headline");
+  hl.innerHTML="<div class='tag'>"+headline.tag+"</div><div class='msg'>"+headline.msg+"</div><div class='tip'>💡 "+headline.tip+"</div>";
+
+  document.getElementById("resultCard").scrollIntoView({behavior:"smooth", block:"start"});
+}
+
+function resetResultForNewTake(){
+  document.getElementById("resultCard").classList.add("hidden");
+}
+
+/* ==================================================================
+   초기화
+   ================================================================== */
+renderMelPicker();
+</script>
+</body>
+</html>
